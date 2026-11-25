@@ -33,6 +33,7 @@ import {
   fetchAllUsersForAdmin,
   fetchSharedAIPublicConfig,
   grantOrRevokeAdmin,
+  reloadCurrentUser,
   resetUserDailyQuota,
   saveAdminSharedAIConfig,
   sendCurrentUserVerificationEmail,
@@ -44,6 +45,7 @@ import {
   fetchProxyAdminConfig,
   fetchProxyUsageLogs,
   saveProxyAdminConfig,
+  testAIConnection,
   testProxyAdminAI,
   type ProxyHealthResponse,
 } from '../services/aiService';
@@ -92,6 +94,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [usageLogs, setUsageLogs] = useState<AIUsageLogRecord[]>([]);
   const [publicCfg, setPublicCfg] = useState<SharedAIPublicConfig | null>(null);
   const [sendingVerify, setSendingVerify] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadAdminData = useCallback(async () => {
     if (!cloudUser || !isAdmin) {
@@ -99,15 +102,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
     setLoading(true);
+    setLoadError(null);
 
     try {
+      const errors: string[] = [];
       const [pub, secret, allUsers, fsLogs, health] = await Promise.all([
-        fetchSharedAIPublicConfig().catch(() => null),
-        fetchAdminAISecret().catch(() => null),
-        fetchAllUsersForAdmin().catch(() => []),
+        fetchSharedAIPublicConfig().catch((e) => {
+          errors.push(`appConfig: ${e instanceof Error ? e.message : String(e)}`);
+          return null;
+        }),
+        fetchAdminAISecret().catch((e) => {
+          errors.push(`adminSecrets: ${e instanceof Error ? e.message : String(e)}`);
+          return null;
+        }),
+        fetchAllUsersForAdmin().catch((e) => {
+          errors.push(`users: ${e instanceof Error ? e.message : String(e)}`);
+          return [];
+        }),
         fetchAdminUsageLogs(40).catch(() => []),
         checkProxyServerHealth(localProxyUrl).catch(() => null),
       ]);
+      if (errors.length > 0) setLoadError(errors.join(' | '));
 
       setPublicCfg(pub);
       setUsers(allUsers);
@@ -240,14 +255,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           message: res.error || 'Server test failed',
         });
       }
-    } catch (err) {
-      setTestResult({
-        ok: false,
-        message:
-          lang === 'id'
-            ? `Server Proxy belum aktif di "${localProxyUrl || '/api'}". Jalankan: npm run dev:full`
-            : `Proxy server unreachable at "${localProxyUrl || '/api'}". Run: npm run dev:full`,
-      });
+    } catch {
+      // Fallback: test Agnes AI directly if proxy server isn't deployed yet
+      if (apiKey.trim()) {
+        const direct = await testAIConnection({
+          baseUrl: baseUrl.trim() || 'https://apihub.agnes-ai.com/v1',
+          model: model.trim() || 'agnes-2.5-flash',
+          apiKey: apiKey.trim(),
+          useDevProxy: false,
+          preferSharedProxy: false,
+        });
+        if (direct.ok) {
+          setTestResult({
+            ok: true,
+            message: `${direct.reply || 'OK'} (${direct.latencyMs}ms • API Key Valid! Catatan: Proxy Server belum online di "${localProxyUrl || '/api'}")`,
+          });
+        } else {
+          setTestResult({
+            ok: false,
+            message: `Agnes AI error: ${direct.error}`,
+          });
+        }
+      } else {
+        setTestResult({
+          ok: false,
+          message:
+            lang === 'id'
+              ? `Proxy Server belum online di "${localProxyUrl || '/api'}". Masukkan API Key dulu atau jalankan: npm run dev:full`
+              : `Proxy server offline at "${localProxyUrl || '/api'}". Enter API Key or run: npm run dev:full`,
+        });
+      }
     } finally {
       setTesting(false);
     }
@@ -390,7 +427,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => window.location.reload()}
+              onClick={async () => {
+                await reloadCurrentUser();
+                window.location.reload();
+              }}
               className="px-4 py-2 rounded border border-slate-300 bg-white text-slate-800 font-hud font-bold text-xs uppercase btn-anime"
             >
               {lang === 'id' ? 'SUDAH VERIFIKASI (REFRESH)' : 'I VERIFIED (REFRESH)'}
@@ -456,6 +496,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* Telemetry Cards */}
+      {loadError && (
+        <div className="p-3 rounded bg-rose-50 border border-rose-300 text-xs text-rose-800 font-mono">
+          Firestore Diagnostic: {loadError}
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="anime-panel p-3.5">
           <span className="font-mono text-[10px] text-slate-500 flex items-center gap-1">

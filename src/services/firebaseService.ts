@@ -181,6 +181,13 @@ export async function sendCurrentUserVerificationEmail(): Promise<void> {
   await sendEmailVerification(firebaseAuth.currentUser);
 }
 
+export async function reloadCurrentUser(): Promise<User | null> {
+  if (!firebaseAuth?.currentUser) return null;
+  await firebaseAuth.currentUser.reload();
+  await firebaseAuth.currentUser.getIdToken(true);
+  return firebaseAuth.currentUser;
+}
+
 export async function signOutUser(): Promise<void> {
   if (!firebaseAuth) return;
   await signOut(firebaseAuth);
@@ -450,12 +457,28 @@ export async function fetchAdminUsageLogs(maxCount = 40): Promise<AIUsageLogReco
 // =========================================================================
 // USER PROFILE & DAILY LOGS SYNC
 // =========================================================================
+function stripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripUndefined(item)) as unknown as T;
+  }
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v !== undefined) {
+        out[k] = stripUndefined(v);
+      }
+    }
+    return out as T;
+  }
+  return value;
+}
+
 function sanitizeProfileForFirestore(uid: string, player: PlayerProfile) {
   return {
     ownerUid: uid,
     schemaVersion: PLAYER_SCHEMA_VERSION,
     updatedAt: serverTimestamp(),
-    name: player.name.slice(0, 100),
+    name: (player.name || 'Hunter').slice(0, 100),
     gender: player.gender === 'female' ? 'female' : 'male',
     age: Math.max(10, Math.min(120, Number(player.age) || 24)),
     height: Math.max(100, Math.min(250, Number(player.height) || 170)),
@@ -470,7 +493,7 @@ function sanitizeProfileForFirestore(uid: string, player: PlayerProfile) {
     },
     profession: (player.profession || 'Entrepreneur').slice(0, 160),
     classTitle: (player.classTitle || 'Awakened Vanguard').slice(0, 120),
-    goal: (player.goal || '').slice(0, 300),
+    goal: (player.goal || 'Level Up').slice(0, 300),
     targetLevel: Math.max(1, Math.min(999, Math.round(player.targetLevel || 15))),
     dailyBreakdown: {
       total: Math.max(0, Math.round(player.dailyBreakdown.total || 150)),
@@ -499,15 +522,15 @@ function sanitizeProfileForFirestore(uid: string, player: PlayerProfile) {
       agi: Math.max(0, Number(player.stats.agi) || 10),
       cha: Math.max(0, Number(player.stats.cha) || 10),
     },
-    stages: (player.stages || []).slice(0, 20),
-    quests: (player.quests || []).slice(0, 100),
-    shadows: (player.shadows || []).slice(0, 200),
-    skillProgress: player.skillProgress || {},
-    dreamSteps: (player.dreamSteps || []).slice(0, 50),
-    rewards: (player.rewards || []).slice(0, 50),
-    discoveredPerks: (player.discoveredPerks || []).slice(0, 30),
-    growthNews: (player.growthNews || []).slice(0, 30),
-    groundingSources: (player.groundingSources || []).slice(0, 30),
+    stages: stripUndefined((player.stages || []).slice(0, 20)),
+    quests: stripUndefined((player.quests || []).slice(0, 100)),
+    shadows: stripUndefined((player.shadows || []).slice(0, 200)),
+    skillProgress: stripUndefined(player.skillProgress || {}),
+    dreamSteps: stripUndefined((player.dreamSteps || []).slice(0, 50)),
+    rewards: stripUndefined((player.rewards || []).slice(0, 50)),
+    discoveredPerks: stripUndefined((player.discoveredPerks || []).slice(0, 30)),
+    growthNews: stripUndefined((player.growthNews || []).slice(0, 30)),
+    groundingSources: stripUndefined((player.groundingSources || []).slice(0, 30)),
     boss: {
       name: (player.boss?.name || player.goal || '').slice(0, 300),
       desc: (player.boss?.desc || player.goal || '').slice(0, 500),

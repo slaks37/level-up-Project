@@ -59,7 +59,8 @@ export async function fetchProxyAdminConfig(proxyBaseUrl: string, idToken: strin
   const resp = await fetch(buildProxyUrl(proxyBaseUrl, '/api/admin/config'), {
     headers: { Authorization: `Bearer ${idToken}` },
   });
-  if (!resp.ok) return null;
+  const ct = resp.headers.get('content-type') || '';
+  if (!resp.ok || !ct.includes('application/json')) return null;
   return (await resp.json()) as {
     baseUrl: string;
     model: string;
@@ -92,6 +93,10 @@ export async function saveProxyAdminConfig(
     },
     body: JSON.stringify(payload),
   });
+  const ct = resp.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    throw new Error('PROXY_UNAVAILABLE');
+  }
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
     throw new Error(err.error || `HTTP ${resp.status}`);
@@ -116,6 +121,10 @@ export async function testProxyAdminAI(
     },
     body: JSON.stringify(payload),
   });
+  const ct = resp.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    throw new Error('PROXY_UNAVAILABLE');
+  }
   return (await resp.json()) as {
     ok: boolean;
     latencyMs?: number;
@@ -131,7 +140,8 @@ export async function fetchProxyUsageLogs(
   const resp = await fetch(buildProxyUrl(proxyBaseUrl, '/api/admin/usage-logs'), {
     headers: { Authorization: `Bearer ${idToken}` },
   });
-  if (!resp.ok) return [];
+  const ct = resp.headers.get('content-type') || '';
+  if (!resp.ok || !ct.includes('application/json')) return [];
   const data = (await resp.json()) as { logs?: AIUsageLogRecord[] };
   return Array.isArray(data.logs) ? data.logs : [];
 }
@@ -668,6 +678,8 @@ Provide 4 perks (2 local deals for ${city} with cost 50-90 CR, 2 free internet r
       const perks: DiscoveredPerk[] = parsed.perks.slice(0, 6).map((p, idx) => {
         const upperType = (p.type || '').toUpperCase();
         const isFree = upperType.includes('GRATIS') || upperType.includes('FREE');
+        const validUrl =
+          p.sourceUrl && p.sourceUrl.startsWith('http') ? p.sourceUrl.trim() : '';
         return {
           id: `ai_perk_${now}_${idx}`,
           type:
@@ -688,22 +700,24 @@ Provide 4 perks (2 local deals for ${city} with cost 50-90 CR, 2 free internet r
                 ? 0
                 : 60,
           actionTip: (p.actionTip || '').trim().slice(0, 300),
-          sourceUrl:
-            p.sourceUrl && p.sourceUrl.startsWith('http') ? p.sourceUrl.trim() : undefined,
+          ...(validUrl ? { sourceUrl: validUrl } : {}),
         };
       });
 
       const news: GrowthNewsItem[] =
         Array.isArray(parsed.news) && parsed.news.length > 0
-          ? parsed.news.slice(0, 5).map((n, idx) => ({
-              id: `ai_news_${now}_${idx}`,
-              tag: (n.tag || (lang === 'id' ? 'PELUANG' : 'OPPORTUNITY')).trim().slice(0, 32),
-              title: (n.title || 'Growth Opportunity').trim().slice(0, 140),
-              summary: (n.summary || '').trim().slice(0, 240),
-              actionTask: (n.actionTask || `Pelajari: ${n.title}`).trim().slice(0, 140),
-              sourceUrl:
-                n.sourceUrl && n.sourceUrl.startsWith('http') ? n.sourceUrl.trim() : undefined,
-            }))
+          ? parsed.news.slice(0, 5).map((n, idx) => {
+              const validUrl =
+                n.sourceUrl && n.sourceUrl.startsWith('http') ? n.sourceUrl.trim() : '';
+              return {
+                id: `ai_news_${now}_${idx}`,
+                tag: (n.tag || (lang === 'id' ? 'PELUANG' : 'OPPORTUNITY')).trim().slice(0, 32),
+                title: (n.title || 'Growth Opportunity').trim().slice(0, 140),
+                summary: (n.summary || '').trim().slice(0, 240),
+                actionTask: (n.actionTask || `Pelajari: ${n.title}`).trim().slice(0, 140),
+                ...(validUrl ? { sourceUrl: validUrl } : {}),
+              };
+            })
           : getDefaultGrowthNews(city, player.profession, player.goal, lang);
 
       return {

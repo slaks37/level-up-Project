@@ -699,12 +699,10 @@ export default function App() {
       player.dreamSteps.find((s) => !s.completed) || player.dreamSteps[0];
     const refreshedQuests =
       player.quests.length > 0
-        ? player.quests.map((q) => ({
-            ...q,
-            completed: false,
-            completedQty: undefined,
-            completedRpe: undefined,
-          }))
+        ? player.quests.map((q) => {
+            const { completedQty: _cq, completedRpe: _cr, ...cleanQuest } = q;
+            return { ...cleanQuest, completed: false };
+          })
         : createSyncedQuestsForActiveStep(activeStep, player.dailyBreakdown, lang);
 
     const base: PlayerProfile = {
@@ -957,7 +955,14 @@ export default function App() {
           player && !isAdminView && !shouldShowAuthGate ? 'pb-24 lg:pb-8' : ''
         }`}
       >
-        {shouldShowAuthGate ? (
+        {isFirebaseReady() && !authResolved ? (
+          <div className="max-w-md mx-auto py-16 text-center space-y-2">
+            <div className="w-8 h-8 border-2 border-sky-600 border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="font-mono text-xs text-slate-600">
+              {lang === 'id' ? 'Memeriksa sesi akun Cloud...' : 'Checking Cloud session...'}
+            </p>
+          </div>
+        ) : shouldShowAuthGate ? (
           <AuthView
             lang={lang}
             onContinueOffline={() => {
