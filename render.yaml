@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: level-up-ai-proxy
+    runtime: node
+    rootDir: server
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        value: level-up-os-sl26
+      - key: AGNES_AI_BASE_URL
+        value: https://apihub.agnes-ai.com/v1
+      - key: AGNES_AI_MODEL
+        value: agnes-2.5-flash
+      - key: DEFAULT_DAILY_LIMIT
+        value: "20"
+      - key: ALLOWED_ORIGINS
+        value: https://level-up-os-sl26.web.app,https://level-up-os-sl26.firebaseapp.com,http://localhost:5173
+      - key: FIREBASE_WEB_API_KEY
+        sync: false
+      - key: AGNES_AI_API_KEY
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false

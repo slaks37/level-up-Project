@@ -6,8 +6,10 @@ import {
   Cpu,
   Download,
   Loader2,
+  LogIn,
   RotateCcw,
   Settings,
+  Shield,
 } from 'lucide-react';
 import type { User } from 'firebase/auth';
 import type { Language, SyncStatus } from '../types';
@@ -19,6 +21,10 @@ interface HeaderProps {
   hasPlayer: boolean;
   syncStatus: SyncStatus;
   cloudUser: User | null;
+  canAccessAdmin: boolean;
+  isAdminView: boolean;
+  onToggleAdminView: () => void;
+  onOpenAuthScreen: () => void;
   canInstallPWA: boolean;
   onInstallPWA: () => void;
   onOpenScience: () => void;
@@ -32,6 +38,10 @@ export const Header: React.FC<HeaderProps> = ({
   hasPlayer,
   syncStatus,
   cloudUser,
+  canAccessAdmin,
+  isAdminView,
+  onToggleAdminView,
+  onOpenAuthScreen,
   canInstallPWA,
   onInstallPWA,
   onOpenScience,
@@ -109,22 +119,47 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Cloud Sync Status / Account Pill */}
-          <button
-            type="button"
-            onClick={() => onOpenSettings('cloud')}
-            className={`px-2 py-1.5 rounded border font-mono text-[10px] font-bold flex items-center gap-1.5 transition ${syncBadge.cls}`}
-            title={
-              cloudUser
-                ? `${cloudUser.displayName || cloudUser.email} (${syncBadge.label})`
-                : tr(lang, 'cloudTitle')
-            }
-          >
-            {syncBadge.icon}
-            <span className="hidden md:inline max-w-[110px] truncate">
-              {cloudUser ? cloudUser.displayName || cloudUser.email?.split('@')[0] : syncBadge.label}
-            </span>
-          </button>
+          {/* Admin Console Toggle (visible only to Admin) */}
+          {canAccessAdmin && (
+            <button
+              type="button"
+              onClick={onToggleAdminView}
+              className={`px-2.5 py-1.5 rounded font-hud font-bold text-xs flex items-center gap-1 border transition btn-anime ${
+                isAdminView
+                  ? 'bg-orange-600 border-orange-700 text-white'
+                  : 'bg-slate-900 hover:bg-orange-600 border-slate-900 text-orange-400 hover:text-white'
+              }`}
+              title="Admin Control Center"
+            >
+              <Shield className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">ADMIN</span>
+            </button>
+          )}
+
+          {/* Cloud Sync / Login Button */}
+          {cloudUser ? (
+            <button
+              type="button"
+              onClick={() => onOpenSettings('cloud')}
+              className={`px-2 py-1.5 rounded border font-mono text-[10px] font-bold flex items-center gap-1.5 transition ${syncBadge.cls}`}
+              title={`${cloudUser.displayName || cloudUser.email} (${syncBadge.label})`}
+            >
+              {syncBadge.icon}
+              <span className="hidden md:inline max-w-[110px] truncate">
+                {cloudUser.displayName || cloudUser.email?.split('@')[0]}
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenAuthScreen}
+              className="px-2.5 py-1.5 rounded bg-sky-600 hover:bg-sky-700 text-white font-hud font-bold text-xs flex items-center gap-1 transition btn-anime"
+              title={lang === 'id' ? 'Masuk / Daftar Email' : 'Sign In / Register'}
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{lang === 'id' ? 'LOGIN' : 'SIGN IN'}</span>
+            </button>
+          )}
 
           {/* Language Toggle */}
           <div className="flex items-center bg-slate-100 border border-slate-300 rounded p-0.5 font-mono text-[11px] font-bold">
@@ -159,7 +194,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="hidden xl:inline">{tr(lang, 'btnScienceLbl')}</span>
           </button>
 
-          {/* Settings (Agnes AI + Firebase + Backup) */}
+          {/* Settings */}
           <button
             type="button"
             onClick={() => onOpenSettings('ai')}
@@ -171,7 +206,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           {/* Reset Profile */}
-          {hasPlayer && (
+          {hasPlayer && !isAdminView && (
             <button
               type="button"
               onClick={onOpenReset}

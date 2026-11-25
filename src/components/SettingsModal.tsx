@@ -20,6 +20,7 @@ import type {
   AIConfig,
   FirebaseRuntimeConfig,
   Language,
+  SharedAIPublicConfig,
   SyncStatus,
 } from '../types';
 import { ModalShell } from './Modals';
@@ -38,6 +39,7 @@ interface SettingsModalProps {
   initialTab?: 'ai' | 'cloud' | 'app';
   lang: Language;
   aiConfig: AIConfig;
+  sharedAIConfig: SharedAIPublicConfig | null;
   onSaveAIConfig: (cfg: AIConfig) => void;
   cloudUser: User | null;
   syncStatus: SyncStatus;
@@ -57,6 +59,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   initialTab = 'ai',
   lang,
   aiConfig,
+  sharedAIConfig,
   onSaveAIConfig,
   cloudUser,
   syncStatus,
@@ -74,6 +77,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [tab, setTab] = useState<'ai' | 'cloud' | 'app'>(initialTab);
 
   // Agnes AI State
+  const [preferSharedProxy, setPreferSharedProxy] = useState(
+    aiConfig.preferSharedProxy !== false
+  );
+  const [proxyBaseUrl, setProxyBaseUrl] = useState(aiConfig.proxyBaseUrl || '');
   const [baseUrl, setBaseUrl] = useState(aiConfig.baseUrl);
   const [model, setModel] = useState(aiConfig.model);
   const [apiKey, setApiKey] = useState(aiConfig.apiKey);
@@ -114,6 +121,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       model: model.trim() || 'agnes-2.5-flash',
       apiKey: apiKey.trim(),
       useDevProxy,
+      preferSharedProxy,
+      proxyBaseUrl: proxyBaseUrl.trim(),
     };
     onSaveAIConfig(nextCfg);
     onNotify(
@@ -130,6 +139,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       model: model.trim() || 'agnes-2.5-flash',
       apiKey: apiKey.trim(),
       useDevProxy,
+      preferSharedProxy,
+      proxyBaseUrl: proxyBaseUrl.trim(),
     };
     onSaveAIConfig(candidate);
     setTestingAI(true);
@@ -139,7 +150,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (res.ok) {
       setTestResult({
         ok: true,
-        message: `${res.reply || 'OK'} (${res.latencyMs}ms)`,
+        message: `${res.reply || 'OK'} (${res.latencyMs}ms${res.viaSharedProxy ? ' • Shared Proxy' : ' • Direct BYOK'})`,
       });
     } else {
       setTestResult({
@@ -312,16 +323,70 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </button>
       </div>
 
-      {/* TAB 1: AGNES AI (OPENAI STANDARD) */}
+      {/* TAB 1: AGNES AI (SHARED PROXY + PERSONAL BYOK) */}
       {tab === 'ai' && (
         <form onSubmit={handleSaveAI} className="space-y-3">
-          <div className="p-3 rounded bg-sky-50 border border-sky-200 text-xs text-sky-900">
-            <p className="font-bold">Agnes AI / OpenAI-Compatible API</p>
+          {/* Shared Admin AI Status Banner */}
+          <div className="p-3 rounded bg-emerald-50 border border-emerald-200 text-xs space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-bold text-emerald-900">
+                {lang === 'id'
+                  ? 'Shared Agnes AI (API Key dari Admin)'
+                  : 'Shared Agnes AI (Admin-Provided Key)'}
+              </span>
+              <span
+                className={`font-mono text-[9px] font-bold px-2 py-0.5 rounded uppercase ${
+                  sharedAIConfig?.enabled && sharedAIConfig?.proxyConfigured
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-200 text-slate-700'
+                }`}
+              >
+                {sharedAIConfig?.enabled && sharedAIConfig?.proxyConfigured
+                  ? `${sharedAIConfig.model} • ${sharedAIConfig.dailyLimit}/hari`
+                  : lang === 'id'
+                    ? 'Menunggu Admin'
+                    : 'Awaiting Admin'}
+              </span>
+            </div>
+            <label className="flex items-center gap-2 text-[11px] text-emerald-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={preferSharedProxy}
+                onChange={(e) => setPreferSharedProxy(e.target.checked)}
+                className="accent-emerald-600 rounded"
+              />
+              <span>
+                {lang === 'id'
+                  ? 'Prioritaskan Shared AI dari Server Admin (tidak perlu isi API Key pribadi)'
+                  : 'Prefer Admin Shared AI Proxy (no personal API key needed)'}
+              </span>
+            </label>
+          </div>
+
+          <div className="p-2.5 rounded bg-sky-50 border border-sky-200 text-[11px] text-sky-900">
+            <p className="font-bold">
+              {lang === 'id'
+                ? 'Opsional: Gunakan API Key Pribadi (BYOK / Offline Fallback)'
+                : 'Optional: Bring Your Own Agnes AI / OpenAI Key (BYOK)'}
+            </p>
             <p className="text-sky-700 mt-0.5">
               {lang === 'id'
-                ? 'API Key disimpan privat hanya di perangkatmu (tidak pernah diunggah ke Firestore). Mendukung Agnes AI, OpenAI, OpenRouter, Groq, dll.'
-                : 'Your API Key is stored privately on this device only (never uploaded to Firestore). Supports Agnes AI, OpenAI, OpenRouter, Groq, etc.'}
+                ? 'API Key pribadi disimpan hanya di perangkat ini (tidak pernah diunggah ke Firestore).'
+                : 'Personal API keys stay private on this device only (never uploaded to Firestore).'}
             </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Shared Proxy Server URL (Opsional)
+            </label>
+            <input
+              type="text"
+              value={proxyBaseUrl}
+              onChange={(e) => setProxyBaseUrl(e.target.value)}
+              placeholder="/api (otomatis lokal) atau URL Render/Cloud Run"
+              className="w-full px-3 py-1.5 rounded border border-slate-300 font-mono text-[11px] text-slate-900 focus:outline-none focus:border-sky-600"
+            />
           </div>
 
           <div>

@@ -4,22 +4,74 @@ rules_version = '2';
 // Assumed Data Model — LEVEL UP SYSTEM PWA
 // ===============================================================
 //
-// All user data is strictly private per authenticated Firebase user
-// (request.auth.uid == userId). No public or cross-user access is allowed.
-// No API keys or external AI credentials are permitted in Firestore.
+// Security Architecture:
+//   - Default-deny at root (`/{document=**}`).
+//   - Admin authority is derived ONLY from trusted sources:
+//       1) Bootstrap Admin verified JWT email (`stefenlaksana.sl@gmail.com`)
+//       2) Server/Admin-managed existence check in `admins/{uid}`
+//     Admin authority NEVER trusts client-writable fields such as `users/{uid}.role`.
+//   - Private player health, profile, and daily log data remain strictly
+//     owner-only (`request.auth.uid == userId`), inaccessible even to admins.
+//   - Shared AI provider secrets (`adminSecrets/aiProvider`) are strictly
+//     admin-only and NEVER readable by regular users.
+//   - Non-secret AI status (`appConfig/aiPublic`) is readable by authenticated
+//     users and strictly forbids any API key or secret fields.
 //
-// 1. Collection: users/{userId} (optional account metadata document)
+// 1. Collection: admins/{uid}
+//    Document ID: {uid} (Firebase Auth UID of granted admin)
+//    Access: owner or admin `get`, admin `list`/`create`/`delete` (no self-delete), no `update`.
+//    Fields (all 4 required; strict hasOnly):
+//      - uid: string (1..128 chars; == {uid})
+//      - email: string (1..254 chars)
+//      - grantedBy: string (1..128 chars)
+//      - createdAt: timestamp
+//
+// 2. Collection: appConfig/{docId}
+//    Document ID: strictly 'aiPublic' (no API keys or secrets permitted)
+//    Access: authenticated `get`, admin `list`/`create`/`update`, no `delete`.
+//    Fields (all 8 required; strict hasOnly):
+//      - enabled: bool
+//      - providerName: string (1..60 chars)
+//      - model: string (1..80 chars)
+//      - dailyLimit: int (0..500)
+//      - proxyConfigured: bool
+//      - maintenanceNotice: string (0..300 chars)
+//      - updatedAt: timestamp
+//      - updatedBy: string (1..128 chars)
+//
+// 3. Collection: adminSecrets/{docId}
+//    Document ID: strictly 'aiProvider' (admin-only API key vault)
+//    Access: admin `get`/`create`/`update`, no `list` or `delete`.
+//    Fields (all 7 required; strict hasOnly):
+//      - baseUrl: string (1..300 chars; matches ^https?://.+$)
+//      - model: string (1..80 chars)
+//      - apiKey: string (0..500 chars)
+//      - enabled: bool
+//      - dailyLimit: int (0..500)
+//      - updatedAt: timestamp
+//      - updatedBy: string (1..128 chars)
+//
+// 4. Collection: users/{userId} (User Account Directory)
 //    Document ID: {userId} (Firebase Auth UID)
-//    Fields (all required; strict hasOnly):
-//      - ownerUid: string == userId (immutable on update)
+//    Access: owner or admin `get`/`delete`, admin `list`, owner `create`
+//            (regular users forced to default role/status/quota), owner or
+//            admin `update` (regular users cannot alter role/status/quota).
+//    Fields (all 11 required; strict hasOnly):
+//      - ownerUid: string (1..128 chars; == userId; immutable on update)
 //      - displayName: string (1..120 chars)
 //      - email: string (0..254 chars; empty or valid email format)
 //      - language: string in ['id', 'en']
+//      - role: string in ['user', 'admin'] (locked for non-admins)
+//      - status: string in ['active', 'suspended'] (locked for non-admins)
+//      - aiRequestsToday: int (0..10000; locked for non-admins)
+//      - aiTotalRequests: int (0..1000000; locked for non-admins)
+//      - aiQuotaDate: string (0..10 chars; empty or YYYY-MM-DD; locked for non-admins)
 //      - createdAt: timestamp (immutable on update)
 //      - updatedAt: timestamp
 //
-// 2. Collection: users/{userId}/profile/{docId}
+// 5. Collection: users/{userId}/profile/{docId}
 //    Document ID: strictly 'main'
+//    Access: strictly owner-only CRUD (`isOwner(userId)`).
 //    Fields (all 37 required; strict hasOnly; NO API keys permitted):
 //      - ownerUid: string == userId (immutable on update)
 //      - schemaVersion: int (1..20)
@@ -59,8 +111,9 @@ rules_version = '2';
 //      - groundingSources: list (size <= 30)
 //      - boss: map { name: string(0..300), desc: string(0..500), hp: number, maxHp: number }
 //
-// 3. Collection: users/{userId}/dailyLogs/{dateKey}
+// 6. Collection: users/{userId}/dailyLogs/{dateKey}
 //    Document ID: {dateKey} matching YYYY-MM-DD (format & month/day range check)
+//    Access: strictly owner-only CRUD (`isOwner(userId)`).
 //    Fields (all 13 required; strict hasOnly):
 //      - ownerUid: string == userId (immutable on update)
 //      - dateKey: string == {dateKey} doc ID (immutable on update)
@@ -76,10 +129,15 @@ rules_version = '2';
 //      - nutritionCondition: string in ['deficit', 'balanced', 'high_protein']
 //      - createdAt: timestamp (preserved or server request.time on same-day upsert)
 //
-// Note: Because users/{userId} is optional, subcollections do not require
-// the parent users/{userId} document to exist. Timestamps are validated by
-// type rather than request.time equality so offline-first PWA sync works
-// reliably across clock skew and delayed reconnection.
+// 7. Collection: aiUsageLogs/{logId}
+//    Document ID: auto-generated server log ID
+//    Access: admin-only `get`/`list`; all client writes denied (written
+//            exclusively via server Firebase Admin SDK).
+//
+// Note: Because users/{userId} may be synced independently in offline-first
+// mode, subcollections do not require the parent users/{userId} document to
+// exist. Timestamps are validated by type rather than request.time equality
+// so offline-first PWA sync works reliably across clock skew and reconnection.
 //
 // ===============================================================
 
@@ -87,7 +145,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ===============================================================
-    // Core Auth & Ownership Helpers
+    // Core Auth, Admin & Ownership Helpers
     // ===============================================================
 
     function isAuthenticated() {
@@ -96,6 +154,20 @@ service cloud.firestore {
 
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isBootstrapAdmin() {
+      return isAuthenticated() &&
+        'email' in request.auth.token &&
+        'email_verified' in request.auth.token &&
+        request.auth.token.email == 'stefenlaksana.sl@gmail.com' &&
+        request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin() ||
+        (isAuthenticated() &&
+         exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
     }
 
     function uidUnchanged(userId) {
@@ -136,6 +208,10 @@ service cloud.firestore {
       return val is string && val.size() >= minLen && val.size() <= maxLen;
     }
 
+    function isNonEmptyString(val, maxLen) {
+      return isValidString(val, 1, maxLen);
+    }
+
     function isIntInRange(val, minVal, maxVal) {
       return val is int && val >= minVal && val <= maxVal;
     }
@@ -151,6 +227,11 @@ service cloud.firestore {
     function isValidEmail(email) {
       return email is string &&
         email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+
+    function isValidHttpUrl(url, maxLen) {
+      return isValidString(url, 1, maxLen) &&
+        url.matches('^https?://.+$');
     }
 
     // Format + month/day range validation (does not enforce calendar month lengths).
@@ -225,17 +306,70 @@ service cloud.firestore {
     // Domain Validators (Mandatory in BOTH create and update)
     // ===============================================================
 
-    function isValidUserAccount(data, userId) {
+    function isValidAdminGrant(data, uid) {
+      let allowedFields = ['uid', 'email', 'grantedBy', 'createdAt'];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        isNonEmptyString(data.uid, 128) &&
+        data.uid == uid &&
+        isNonEmptyString(data.email, 254) &&
+        isNonEmptyString(data.grantedBy, 128) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidAiPublicConfig(data) {
       let allowedFields = [
-        'ownerUid', 'displayName', 'email', 'language', 'createdAt', 'updatedAt'
+        'enabled', 'providerName', 'model', 'dailyLimit',
+        'proxyConfigured', 'maintenanceNotice', 'updatedAt', 'updatedBy'
       ];
       return hasOnlyAllowedFields(allowedFields) &&
         hasRequiredFields(allowedFields) &&
-        data.ownerUid is string && data.ownerUid == userId &&
+        data.enabled is bool &&
+        isValidString(data.providerName, 1, 60) &&
+        isValidString(data.model, 1, 80) &&
+        isIntInRange(data.dailyLimit, 0, 500) &&
+        data.proxyConfigured is bool &&
+        isValidString(data.maintenanceNotice, 0, 300) &&
+        data.updatedAt is timestamp &&
+        isValidString(data.updatedBy, 1, 128);
+    }
+
+    function isValidAiSecretConfig(data) {
+      let allowedFields = [
+        'baseUrl', 'model', 'apiKey', 'enabled',
+        'dailyLimit', 'updatedAt', 'updatedBy'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        isValidHttpUrl(data.baseUrl, 300) &&
+        isValidString(data.model, 1, 80) &&
+        isValidString(data.apiKey, 0, 500) &&
+        data.enabled is bool &&
+        isIntInRange(data.dailyLimit, 0, 500) &&
+        data.updatedAt is timestamp &&
+        isValidString(data.updatedBy, 1, 128);
+    }
+
+    function isValidUserAccount(data, userId) {
+      let allowedFields = [
+        'ownerUid', 'displayName', 'email', 'language',
+        'role', 'status', 'aiRequestsToday', 'aiTotalRequests',
+        'aiQuotaDate', 'createdAt', 'updatedAt'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        isNonEmptyString(data.ownerUid, 128) &&
+        data.ownerUid == userId &&
         isValidString(data.displayName, 1, 120) &&
         isValidString(data.email, 0, 254) &&
         (data.email.size() == 0 || isValidEmail(data.email)) &&
         data.language is string && data.language in ['id', 'en'] &&
+        data.role is string && data.role in ['user', 'admin'] &&
+        data.status is string && data.status in ['active', 'suspended'] &&
+        isIntInRange(data.aiRequestsToday, 0, 10000) &&
+        isIntInRange(data.aiTotalRequests, 0, 1000000) &&
+        isValidString(data.aiQuotaDate, 0, 10) &&
+        (data.aiQuotaDate.size() == 0 || isValidDateKey(data.aiQuotaDate)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -322,19 +456,63 @@ service cloud.firestore {
     // Collection Rules
     // ===============================================================
 
-    // Optional account metadata document (private per owner)
+    // Admin grant directory (trusted RBAC membership; no client updates)
+    match /admins/{uid} {
+      allow get: if isOwner(uid) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidAdminGrant(request.resource.data, uid);
+      allow update: if false;
+      allow delete: if isAdmin() && uid != request.auth.uid;
+    }
+
+    // Non-secret public AI configuration (strictly no API keys)
+    match /appConfig/{docId} {
+      allow get: if isAuthenticated() && docId == 'aiPublic';
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() &&
+        docId == 'aiPublic' &&
+        isValidAiPublicConfig(request.resource.data);
+      allow delete: if false;
+    }
+
+    // Admin-only AI provider API key vault (never readable by regular users)
+    match /adminSecrets/{docId} {
+      allow get: if isAdmin() && docId == 'aiProvider';
+      allow create, update: if isAdmin() &&
+        docId == 'aiProvider' &&
+        isValidAiSecretConfig(request.resource.data);
+      allow list, delete: if false;
+    }
+
+    // User Account Directory (self-service metadata + admin user management)
     match /users/{userId} {
-      allow read: if isOwner(userId);
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
       allow create: if isOwner(userId) &&
         uidUnchanged(userId) &&
-        isValidUserAccount(request.resource.data, userId);
-      allow update: if isOwner(userId) &&
+        isValidUserAccount(request.resource.data, userId) &&
+        (isAdmin() || (
+          request.resource.data.role == 'user' &&
+          request.resource.data.status == 'active' &&
+          request.resource.data.aiRequestsToday == 0 &&
+          request.resource.data.aiTotalRequests == 0 &&
+          request.resource.data.aiQuotaDate == ''
+        ));
+      allow update: if isAuthenticated() &&
+        isValidUserAccount(request.resource.data, userId) &&
         uidNotModified() &&
-        areImmutableFieldsUnchanged(['ownerUid', 'createdAt']) &&
-        isValidUserAccount(request.resource.data, userId);
-      allow delete: if isOwner(userId);
+        request.resource.data.createdAt == resource.data.createdAt &&
+        (isAdmin() || (
+          isOwner(userId) &&
+          request.resource.data.role == resource.data.get('role', 'user') &&
+          request.resource.data.status == resource.data.get('status', 'active') &&
+          request.resource.data.aiRequestsToday == resource.data.get('aiRequestsToday', 0) &&
+          request.resource.data.aiTotalRequests == resource.data.get('aiTotalRequests', 0) &&
+          request.resource.data.aiQuotaDate == resource.data.get('aiQuotaDate', '')
+        ));
+      allow delete: if isOwner(userId) || isAdmin();
 
-      // Main player profile document (strictly docId == 'main', no API keys)
+      // Main player profile document (strictly owner-only, docId == 'main', no API keys)
       match /profile/{docId} {
         allow read: if isOwner(userId) && docId == 'main';
         allow create: if isOwner(userId) &&
@@ -349,7 +527,7 @@ service cloud.firestore {
         allow delete: if isOwner(userId) && docId == 'main';
       }
 
-      // Daily progress logs keyed by YYYY-MM-DD
+      // Daily progress logs keyed by YYYY-MM-DD (strictly owner-only)
       match /dailyLogs/{dateKey} {
         allow get: if isOwner(userId) && isValidDateKey(dateKey);
         allow list: if isOwner(userId);
@@ -366,6 +544,12 @@ service cloud.firestore {
           isValidDailyLog(request.resource.data, userId, dateKey);
         allow delete: if isOwner(userId) && isValidDateKey(dateKey);
       }
+    }
+
+    // Server-written AI usage audit logs (admin read-only)
+    match /aiUsageLogs/{logId} {
+      allow get, list: if isAdmin();
+      allow create, update, delete: if false;
     }
 
     // Default deny all other paths and subcollections

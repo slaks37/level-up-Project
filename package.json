@@ -7,7 +7,11 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "vite --host",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "dev:server": "npm --prefix server run dev",
+    "dev:full": "concurrently -n WEB,API -c cyan,yellow \"npm run dev\" \"npm run dev:server\"",
+    "build:server": "npm --prefix server run build",
+    "build:all": "npm run build && npm run build:server"
   },
   "keywords": [],
   "author": "",
@@ -26,6 +30,7 @@
     "@types/react-dom": "^19.3.0",
     "@types/three": "^0.187.0",
     "@vitejs/plugin-react": "^6.3.0",
+    "concurrently": "^10.0.7",
     "tailwindcss": "^4.3.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",

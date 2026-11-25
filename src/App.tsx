@@ -11,6 +11,7 @@ import type {
   PlayerProfile,
   Quest,
   QuestFilter,
+  SharedAIPublicConfig,
   SleepCondition,
   SyncStatus,
   ToastItem,
@@ -42,13 +43,16 @@ import {
   saveSfxMuted,
 } from './services/storageService';
 import {
+  checkIsUserAdmin,
   deleteProfileFromCloud,
   fetchRecentDailyLogs,
   initFirebaseFromConfig,
+  isFirebaseReady,
   saveDailyLogToCloud,
   saveProfileToCloud,
   subscribeAuth,
   subscribeProfileFromCloud,
+  subscribeSharedAIPublicConfig,
   upsertUserMeta,
 } from './services/firebaseService';
 import {
@@ -58,6 +62,8 @@ import {
 } from './services/aiService';
 import { Header } from './components/Header';
 import { MobileNav } from './components/MobileNav';
+import { AuthView } from './components/AuthView';
+import { AdminDashboard } from './components/AdminDashboard';
 import { AwakeningView } from './components/AwakeningView';
 import { ThreeCoreViewport } from './components/ThreeCoreViewport';
 import {
@@ -122,6 +128,17 @@ export default function App() {
   const [modal, setModal] = useState<ActiveModal>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
+  // Auth / Admin / Routing States
+  const [authResolved, setAuthResolved] = useState(false);
+  const [guestMode, setGuestMode] = useState<boolean>(() => Boolean(loadLocalPlayer('id')));
+  const [showAuthScreen, setShowAuthScreen] = useState(false);
+  const [isAdminView, setIsAdminView] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')
+  );
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isUnverifiedBootstrapAdmin, setIsUnverifiedBootstrapAdmin] = useState(false);
+  const [sharedAIConfig, setSharedAIConfig] = useState<SharedAIPublicConfig | null>(null);
+
   // AI Loading States
   const [isGeneratingRoadmap, setIsGeneratingRoadmap] = useState(false);
   const [isGeneratingQuests, setIsGeneratingQuests] = useState(false);
@@ -154,6 +171,23 @@ export default function App() {
     },
     []
   );
+
+  // Browser back/forward sync for /admin path
+  useEffect(() => {
+    const onPopState = () => {
+      setIsAdminView(window.location.pathname.startsWith('/admin'));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  const navigateAdminView = (open: boolean) => {
+    setIsAdminView(open);
+    const targetPath = open ? '/admin' : '/';
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({}, '', targetPath);
+    }
+  };
 
   // Listen for PWA installability
   useEffect(() => {
@@ -194,7 +228,6 @@ export default function App() {
     };
   }, []);
 
-  // Schedule debounced Cloud Firestore write whenever local user mutates player state
   const commitPlayerChange = useCallback((next: PlayerProfile) => {
     setPlayer(next);
     saveLocalPlayer(next);
@@ -224,10 +257,11 @@ export default function App() {
     }, 350);
   }, []);
 
-  // Initialize Firebase & Auth Listener
+  // Initialize Firebase, Auth Listener, Admin Detection & Shared AI Config
   useEffect(() => {
     let unsubAuth: (() => void) | null = null;
     let unsubProfile: (() => void) | null = null;
+    let unsubSharedAI: (() => void) | null = null;
     let cancelled = false;
 
     const boot = async () => {
@@ -235,7 +269,10 @@ export default function App() {
       if (cancelled) return;
       if (!ready) {
         setCloudUser(null);
+        setIsAdmin(false);
+        setIsUnverifiedBootstrapAdmin(false);
         setSyncStatus('local');
+        setAuthResolved(true);
         return;
       }
 
@@ -243,19 +280,41 @@ export default function App() {
       unsubAuth = subscribeAuth((user) => {
         if (cancelled) return;
         setCloudUser(user);
+        setAuthResolved(true);
 
         if (unsubProfile) {
           unsubProfile();
           unsubProfile = null;
         }
+        if (unsubSharedAI) {
+          unsubSharedAI();
+          unsubSharedAI = null;
+        }
 
         if (!user) {
+          setIsAdmin(false);
+          setIsUnverifiedBootstrapAdmin(false);
+          setSharedAIConfig(null);
           setSyncStatus('local');
           return;
         }
 
+        setShowAuthScreen(false);
         setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-        void upsertUserMeta(user, langRef.current).catch(() => {});
+
+        // Check Admin privileges & register/update user directory doc
+        void checkIsUserAdmin(user).then((adminStatus) => {
+          if (cancelled) return;
+          setIsAdmin(adminStatus.isAdmin);
+          setIsUnverifiedBootstrapAdmin(adminStatus.isUnverifiedBootstrapAdmin);
+          void upsertUserMeta(user, langRef.current, adminStatus.isAdmin).catch(() => {});
+        });
+
+        // Subscribe to Admin-configured Shared AI public status
+        unsubSharedAI = subscribeSharedAIPublicConfig((cfg) => {
+          if (!cancelled) setSharedAIConfig(cfg);
+        });
+
         void fetchRecentDailyLogs(user.uid, 20)
           .then((cloudLogs) => {
             if (!cancelled && cloudLogs.length > 0) {
@@ -276,7 +335,6 @@ export default function App() {
               saveLocalPlayer(remoteProfile);
               setSyncStatus(fromCache && !navigator.onLine ? 'offline' : 'synced');
             } else if (!firstSnapshotHandled && playerRef.current) {
-              // First login with existing local profile: migrate local state to Cloud
               void saveProfileToCloud(user.uid, playerRef.current)
                 .then(() => setSyncStatus('synced'))
                 .catch(() => setSyncStatus('error'));
@@ -299,6 +357,7 @@ export default function App() {
       cancelled = true;
       if (unsubAuth) unsubAuth();
       if (unsubProfile) unsubProfile();
+      if (unsubSharedAI) unsubSharedAI();
     };
   }, [firebaseVersion]);
 
@@ -319,11 +378,10 @@ export default function App() {
       commitPlayerChange({ ...player, bio: updatedBio });
     }
     if (cloudUser) {
-      void upsertUserMeta(cloudUser, nextLang).catch(() => {});
+      void upsertUserMeta(cloudUser, nextLang, isAdmin).catch(() => {});
     }
   };
 
-  // PWA Install handler
   const handleInstallPWA = async () => {
     if (!installPrompt) return;
     await installPrompt.prompt();
@@ -331,7 +389,6 @@ export default function App() {
     setInstallPrompt(null);
   };
 
-  // Awakening completion
   const handleCompleteAwakening = async (input: CreateProfileInput) => {
     const created = createInitialPlayerProfile(input);
     commitPlayerChange(created);
@@ -344,15 +401,14 @@ export default function App() {
       'success'
     );
 
-    // If user already configured Agnes AI, immediately personalize roadmap & perks
-    if (aiConfig.apiKey.trim()) {
+    if (aiConfig.apiKey.trim() || (cloudUser && sharedAIConfig?.enabled && sharedAIConfig?.proxyConfigured)) {
       void runGenerateRoadmap(created, true);
       void runDiscoverPerks(created, true);
     }
   };
 
   // =========================================================================
-  // AI ACTIONS (AGNES AI / OPENAI STANDARD)
+  // AI ACTIONS (SHARED ADMIN PROXY -> PERSONAL BYOK -> SMART FALLBACK)
   // =========================================================================
   const runGenerateRoadmap = async (targetPlayer?: PlayerProfile, silent = false) => {
     const active = targetPlayer ?? playerRef.current;
@@ -375,18 +431,22 @@ export default function App() {
         notify(
           res.errorMessage
             ? lang === 'id'
-              ? `Agnes AI error (${res.errorMessage.slice(0, 60)}). Memakai rencana cerdas lokal.`
-              : `Agnes AI error (${res.errorMessage.slice(0, 60)}). Used local smart planner.`
+              ? `AI info (${res.errorMessage.slice(0, 75)}). Memakai rencana cerdas lokal.`
+              : `AI note (${res.errorMessage.slice(0, 75)}). Used smart local planner.`
             : lang === 'id'
-              ? 'Rencana cerdas disusun! Isi Agnes AI API Key di Pengaturan untuk AI Coach penuh.'
-              : 'Smart roadmap generated! Add Agnes AI API Key in Settings for full AI coaching.',
+              ? 'Rencana cerdas disusun! Masuk akun atau isi Agnes AI API Key di Pengaturan untuk AI Coach penuh.'
+              : 'Smart roadmap generated! Sign in or add Agnes AI API Key in Settings for full AI coaching.',
           'info'
         );
       } else {
+        const quotaTxt =
+          res.viaSharedProxy && typeof res.remainingToday === 'number'
+            ? ` (${lang === 'id' ? 'sisa kuota' : 'left'}: ${res.remainingToday})`
+            : '';
         notify(
           lang === 'id'
-            ? 'AI Coach (Agnes AI) berhasil memperbarui Peta Impianmu!'
-            : 'AI Coach (Agnes AI) updated your Dream Roadmap!',
+            ? `AI Coach (Agnes AI) berhasil memperbarui Peta Impianmu!${quotaTxt}`
+            : `AI Coach (Agnes AI) updated your Dream Roadmap!${quotaTxt}`,
           'success'
         );
       }
@@ -409,18 +469,22 @@ export default function App() {
       notify(
         res.errorMessage
           ? lang === 'id'
-            ? `Agnes AI error (${res.errorMessage.slice(0, 60)}). Tugas harian dibuat secara lokal.`
-            : `Agnes AI error (${res.errorMessage.slice(0, 60)}). Generated synced local tasks.`
+            ? `AI info (${res.errorMessage.slice(0, 75)}). Tugas harian dibuat secara lokal.`
+            : `AI note (${res.errorMessage.slice(0, 75)}). Generated synced local tasks.`
           : lang === 'id'
-            ? 'Tugas harian tersinkronisasi dengan tahap aktifmu! Isi Agnes AI API Key di Pengaturan untuk variasi AI.'
-            : 'Synced tasks generated! Add Agnes AI API key in Settings for dynamic AI tasks.',
+            ? 'Tugas harian tersinkronisasi dengan tahap aktifmu!'
+            : 'Synced tasks generated for your active milestone!',
         'info'
       );
     } else {
+      const quotaTxt =
+        res.viaSharedProxy && typeof res.remainingToday === 'number'
+          ? ` (${lang === 'id' ? 'sisa kuota' : 'left'}: ${res.remainingToday})`
+          : '';
       notify(
         lang === 'id'
-          ? 'Agnes AI membuat Tugas Harian baru sesuai kondisi tubuh & impianmu!'
-          : 'Agnes AI generated fresh daily tasks matched to your recovery & goal!',
+          ? `Agnes AI membuat Tugas Harian baru sesuai kondisi tubuh & impianmu!${quotaTxt}`
+          : `Agnes AI generated fresh daily tasks matched to your recovery & goal!${quotaTxt}`,
         'success'
       );
     }
@@ -447,11 +511,11 @@ export default function App() {
         notify(
           res.errorMessage
             ? lang === 'id'
-              ? `Agnes AI error (${res.errorMessage.slice(0, 60)}). Menampilkan rekomendasi lokal.`
-              : `Agnes AI error (${res.errorMessage.slice(0, 60)}). Showing local recommendations.`
+              ? `AI info (${res.errorMessage.slice(0, 75)}). Menampilkan rekomendasi lokal.`
+              : `AI note (${res.errorMessage.slice(0, 75)}). Showing local recommendations.`
             : lang === 'id'
-              ? `Menampilkan rekomendasi untuk ${latest.city}. Tambahkan Agnes AI API Key di Pengaturan untuk pencarian AI spesifik!`
-              : `Showing curated perks for ${latest.city}. Add your Agnes AI API Key in Settings for personalized discovery!`,
+              ? `Menampilkan rekomendasi lokal untuk ${latest.city}.`
+              : `Showing curated perks for ${latest.city}.`,
           'info'
         );
       } else {
@@ -799,7 +863,10 @@ export default function App() {
 
   const handleExportJSON = () => {
     if (!player) {
-      notify(lang === 'id' ? 'Belum ada profil untuk di-export.' : 'No profile to export.', 'warning');
+      notify(
+        lang === 'id' ? 'Belum ada profil untuk di-export.' : 'No profile to export.',
+        'warning'
+      );
       return;
     }
     const payload = {
@@ -849,7 +916,15 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  const canAccessAdmin = isAdmin || isUnverifiedBootstrapAdmin;
   const pendingTasksCount = player ? player.quests.filter((q) => !q.completed).length : 0;
+
+  // Determine whether to show Auth Gate screen
+  const shouldShowAuthGate =
+    isFirebaseReady() &&
+    authResolved &&
+    !cloudUser &&
+    (showAuthScreen || isAdminView || (!guestMode && !player));
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -859,6 +934,10 @@ export default function App() {
         hasPlayer={Boolean(player)}
         syncStatus={syncStatus}
         cloudUser={cloudUser}
+        canAccessAdmin={canAccessAdmin}
+        isAdminView={isAdminView}
+        onToggleAdminView={() => navigateAdminView(!isAdminView)}
+        onOpenAuthScreen={() => setShowAuthScreen(true)}
         canInstallPWA={Boolean(installPrompt)}
         onInstallPWA={() => void handleInstallPWA()}
         onOpenScience={() => setModal({ type: 'science' })}
@@ -866,16 +945,46 @@ export default function App() {
         onOpenReset={() => setModal({ type: 'reset' })}
       />
 
+      {/* Optional Admin Broadcast Notice */}
+      {sharedAIConfig?.maintenanceNotice && !isAdminView && !shouldShowAuthGate && (
+        <div className="bg-slate-900 text-sky-100 border-b border-sky-700 px-3 py-1.5 text-center font-mono text-[11px]">
+          ⚡ {sharedAIConfig.maintenanceNotice}
+        </div>
+      )}
+
       <main
         className={`flex-grow max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-5 ${
-          player ? 'pb-24 lg:pb-8' : ''
+          player && !isAdminView && !shouldShowAuthGate ? 'pb-24 lg:pb-8' : ''
         }`}
       >
-        {!player ? (
+        {shouldShowAuthGate ? (
+          <AuthView
+            lang={lang}
+            onContinueOffline={() => {
+              setGuestMode(true);
+              setShowAuthScreen(false);
+              if (isAdminView) navigateAdminView(false);
+            }}
+            onNotify={notify}
+          />
+        ) : isAdminView ? (
+          <AdminDashboard
+            lang={lang}
+            cloudUser={cloudUser}
+            isAdmin={isAdmin}
+            isUnverifiedBootstrapAdmin={isUnverifiedBootstrapAdmin}
+            proxyBaseUrl={aiConfig.proxyBaseUrl || ''}
+            onSaveProxyBaseUrl={(url) =>
+              handleSaveAIConfig({ ...aiConfig, proxyBaseUrl: url })
+            }
+            onBackToApp={() => navigateAdminView(false)}
+            onNotify={notify}
+          />
+        ) : !player ? (
           <AwakeningView
             lang={lang}
             isCloudLoggedIn={Boolean(cloudUser)}
-            onOpenCloudLogin={() => setModal({ type: 'settings', tab: 'cloud' })}
+            onOpenCloudLogin={() => setShowAuthScreen(true)}
             onCompleteAwakening={(input) => void handleCompleteAwakening(input)}
           />
         ) : (
@@ -1000,7 +1109,7 @@ export default function App() {
         )}
       </main>
 
-      {player && (
+      {player && !isAdminView && !shouldShowAuthGate && (
         <MobileNav
           activeTab={mobileTab}
           onSelectTab={(t) => {
@@ -1023,6 +1132,7 @@ export default function App() {
           initialTab={modal.tab}
           lang={lang}
           aiConfig={aiConfig}
+          sharedAIConfig={sharedAIConfig}
           onSaveAIConfig={handleSaveAIConfig}
           cloudUser={cloudUser}
           syncStatus={syncStatus}

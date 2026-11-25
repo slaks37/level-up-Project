@@ -1,5 +1,6 @@
 import type {
   AIConfig,
+  AIUsageLogRecord,
   DiscoveredPerk,
   DreamStep,
   GrowthNewsItem,
@@ -14,6 +15,7 @@ import {
   getDefaultGrowthNews,
   getRecoveryMultiplier,
 } from '../engine/science';
+import { getCurrentUserIdToken } from './firebaseService';
 
 export const AGNES_PRESET_MODELS = [
   { id: 'agnes-2.5-flash', label: 'Agnes 2.5 Flash (Cepat & Hemat)' },
@@ -21,7 +23,120 @@ export const AGNES_PRESET_MODELS = [
   { id: 'agnes-2.5-pro-beta', label: 'Agnes 2.5 Pro Beta (Analisis Mendalam)' },
 ];
 
-function buildEndpointUrl(config: AIConfig): string {
+export interface ProxyHealthResponse {
+  ok: boolean;
+  proxyMode: string;
+  sharedAiConfigured: boolean;
+  enabled: boolean;
+  model: string;
+  dailyLimit: number;
+  maintenanceNotice?: string;
+}
+
+function buildProxyUrl(proxyBaseUrl: string | undefined, path: string): string {
+  const clean = (proxyBaseUrl || '').trim().replace(/\/+$/, '');
+  if (!clean) return path; // uses same-origin /api/* (Vite dev proxy or Firebase Hosting rewrite)
+  return `${clean}${path}`;
+}
+
+export async function checkProxyServerHealth(
+  proxyBaseUrl?: string
+): Promise<ProxyHealthResponse | null> {
+  try {
+    const resp = await fetch(buildProxyUrl(proxyBaseUrl, '/api/health'), {
+      method: 'GET',
+    });
+    if (!resp.ok) return null;
+    const ct = resp.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) return null;
+    return (await resp.json()) as ProxyHealthResponse;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchProxyAdminConfig(proxyBaseUrl: string, idToken: string) {
+  const resp = await fetch(buildProxyUrl(proxyBaseUrl, '/api/admin/config'), {
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  if (!resp.ok) return null;
+  return (await resp.json()) as {
+    baseUrl: string;
+    model: string;
+    enabled: boolean;
+    dailyLimit: number;
+    maintenanceNotice: string;
+    hasApiKey: boolean;
+    apiKeyMasked: string;
+    proxyMode: string;
+  };
+}
+
+export async function saveProxyAdminConfig(
+  proxyBaseUrl: string,
+  idToken: string,
+  payload: {
+    baseUrl: string;
+    model: string;
+    apiKey?: string;
+    enabled: boolean;
+    dailyLimit: number;
+    maintenanceNotice: string;
+  }
+) {
+  const resp = await fetch(buildProxyUrl(proxyBaseUrl, '/api/admin/config'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${resp.status}`);
+  }
+  return (await resp.json()) as {
+    ok: boolean;
+    hasApiKey: boolean;
+    apiKeyMasked: string;
+  };
+}
+
+export async function testProxyAdminAI(
+  proxyBaseUrl: string,
+  idToken: string,
+  payload: { baseUrl?: string; model?: string; apiKey?: string }
+) {
+  const resp = await fetch(buildProxyUrl(proxyBaseUrl, '/api/admin/test-ai'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  return (await resp.json()) as {
+    ok: boolean;
+    latencyMs?: number;
+    reply?: string;
+    error?: string;
+  };
+}
+
+export async function fetchProxyUsageLogs(
+  proxyBaseUrl: string,
+  idToken: string
+): Promise<AIUsageLogRecord[]> {
+  const resp = await fetch(buildProxyUrl(proxyBaseUrl, '/api/admin/usage-logs'), {
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  if (!resp.ok) return [];
+  const data = (await resp.json()) as { logs?: AIUsageLogRecord[] };
+  return Array.isArray(data.logs) ? data.logs : [];
+}
+
+function buildDirectEndpointUrl(config: AIConfig): string {
   const cleanBase = config.baseUrl.replace(/\/+$/, '');
   if (config.useDevProxy && import.meta.env.DEV && cleanBase.includes('apihub.agnes-ai.com')) {
     return '/api/agnes/v1/chat/completions';
@@ -66,19 +181,98 @@ function extractJsonObject<T>(rawText: string): T | null {
 interface ChatCompletionResult {
   content: string;
   model?: string;
+  viaSharedProxy: boolean;
+  remainingToday?: number;
+  dailyLimit?: number;
+}
+
+async function callSharedAIProxy(
+  proxyBaseUrl: string | undefined,
+  idToken: string,
+  systemPrompt: string,
+  userPrompt: string,
+  temperature: number,
+  feature: string
+): Promise<ChatCompletionResult> {
+  const resp = await fetch(buildProxyUrl(proxyBaseUrl, '/api/ai/chat'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({
+      feature,
+      temperature,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+  });
+
+  const ct = resp.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    throw new Error('PROXY_UNAVAILABLE');
+  }
+
+  const data = (await resp.json()) as {
+    content?: string;
+    model?: string;
+    error?: string;
+    usage?: { remainingToday?: number; dailyLimit?: number };
+  };
+
+  if (!resp.ok) {
+    throw new Error(data.error || `Proxy HTTP ${resp.status}`);
+  }
+  if (!data.content) {
+    throw new Error('Empty completion from AI proxy');
+  }
+
+  return {
+    content: data.content,
+    model: data.model,
+    viaSharedProxy: true,
+    remainingToday: data.usage?.remainingToday,
+    dailyLimit: data.usage?.dailyLimit,
+  };
 }
 
 async function callOpenAICompatible(
   config: AIConfig,
   systemPrompt: string,
   userPrompt: string,
-  temperature = 0.6
+  temperature = 0.6,
+  feature = 'chat'
 ): Promise<ChatCompletionResult> {
+  const preferShared = config.preferSharedProxy !== false;
+  const idToken = await getCurrentUserIdToken();
+
+  // 1. Try Secure Shared Admin AI Proxy first when logged in
+  if (idToken && (preferShared || !config.apiKey.trim())) {
+    try {
+      return await callSharedAIProxy(
+        config.proxyBaseUrl,
+        idToken,
+        systemPrompt,
+        userPrompt,
+        temperature,
+        feature
+      );
+    } catch (proxyErr) {
+      // If user has their own personal BYOK key, fall back smoothly to direct call
+      if (!config.apiKey.trim()) {
+        throw proxyErr;
+      }
+    }
+  }
+
+  // 2. Direct OpenAI-compatible call using user's personal BYOK key
   if (!config.apiKey.trim()) {
     throw new Error('API_KEY_MISSING');
   }
 
-  const url = buildEndpointUrl(config);
+  const url = buildDirectEndpointUrl(config);
   const body = {
     model: config.model.trim() || 'agnes-2.5-flash',
     temperature,
@@ -111,7 +305,7 @@ async function callOpenAICompatible(
         throw new Error('Empty response from AI provider');
       }
 
-      return { content, model: data?.model };
+      return { content, model: data?.model, viaSharedProxy: false };
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt === 0) {
@@ -127,6 +321,7 @@ export async function testAIConnection(config: AIConfig): Promise<{
   ok: boolean;
   latencyMs: number;
   reply?: string;
+  viaSharedProxy?: boolean;
   error?: string;
 }> {
   const start = performance.now();
@@ -135,12 +330,14 @@ export async function testAIConnection(config: AIConfig): Promise<{
       config,
       'You are a concise connection check endpoint.',
       'Reply with exactly: LEVEL UP AI READY',
-      0
+      0,
+      'test'
     );
     return {
       ok: true,
       latencyMs: Math.round(performance.now() - start),
       reply: res.content.trim().slice(0, 80),
+      viaSharedProxy: res.viaSharedProxy,
     };
   } catch (err) {
     return {
@@ -162,26 +359,11 @@ export async function generateAIDreamRoadmap(
   dreamSteps: DreamStep[];
   coachAdvice: string;
   usedFallback: boolean;
+  viaSharedProxy?: boolean;
+  remainingToday?: number;
   errorMessage?: string;
 }> {
   const bd = player.dailyBreakdown;
-
-  if (!config.apiKey.trim()) {
-    return {
-      dreamSteps: createDefaultDreamSteps(
-        player.goal,
-        player.profession,
-        player.targetLevel,
-        bd,
-        lang
-      ),
-      coachAdvice:
-        lang === 'id'
-          ? `Fokus pada Tahap #1 (${bd.study}m belajar + ${bd.work}m kerja + ${bd.fitness}m gym/hari). Tambahkan Agnes AI API Key di Pengaturan untuk rencana AI yang lebih spesifik.`
-          : `Focus on Phase #1 (${bd.study}m study + ${bd.work}m work + ${bd.fitness}m workout/day). Add your Agnes AI API key in Settings for hyper-personalized AI coaching.`,
-      usedFallback: true,
-    };
-  }
 
   const systemPrompt =
     'You are an elite science-based career, study, and fitness coach for LEVEL UP SYSTEM. Always return valid JSON only with zero extra commentary.';
@@ -212,7 +394,7 @@ Return ONLY a valid JSON object matching this exact structure:
 Make sure there are exactly 5 steps whose targetLevel increases smoothly up to ${player.targetLevel}.`;
 
   try {
-    const res = await callOpenAICompatible(config, systemPrompt, userPrompt, 0.65);
+    const res = await callOpenAICompatible(config, systemPrompt, userPrompt, 0.65, 'roadmap');
     const parsed = extractJsonObject<{
       coachAdvice?: string;
       steps?: Array<{
@@ -263,15 +445,16 @@ Make sure there are exactly 5 steps whose targetLevel increases smoothly up to $
 
       return {
         dreamSteps: steps,
-        coachAdvice:
-          parsed.coachAdvice?.trim() ||
-          player.coachAdvice,
+        coachAdvice: parsed.coachAdvice?.trim() || player.coachAdvice,
         usedFallback: false,
+        viaSharedProxy: res.viaSharedProxy,
+        remainingToday: res.remainingToday,
       };
     }
 
     throw new Error('Invalid JSON structure returned by AI');
   } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
     return {
       dreamSteps: createDefaultDreamSteps(
         player.goal,
@@ -282,7 +465,7 @@ Make sure there are exactly 5 steps whose targetLevel increases smoothly up to $
       ),
       coachAdvice: player.coachAdvice,
       usedFallback: true,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: rawMsg === 'API_KEY_MISSING' || rawMsg === 'PROXY_UNAVAILABLE' ? undefined : rawMsg,
     };
   }
 }
@@ -297,19 +480,14 @@ export async function generateAIQuests(
 ): Promise<{
   quests: Quest[];
   usedFallback: boolean;
+  viaSharedProxy?: boolean;
+  remainingToday?: number;
   errorMessage?: string;
 }> {
   const activeStep =
     player.dreamSteps.find((s) => !s.completed) || player.dreamSteps[0];
   const bd = player.dailyBreakdown;
   const recMult = getRecoveryMultiplier(player.sleepCondition, player.nutritionCondition);
-
-  if (!config.apiKey.trim()) {
-    return {
-      quests: createSyncedQuestsForActiveStep(activeStep, bd, lang),
-      usedFallback: true,
-    };
-  }
 
   const systemPrompt =
     'You are an evidence-based daily habit & training planner for LEVEL UP SYSTEM. Always return valid JSON only.';
@@ -340,7 +518,7 @@ Return ONLY valid JSON:
 }`;
 
   try {
-    const res = await callOpenAICompatible(config, systemPrompt, userPrompt, 0.7);
+    const res = await callOpenAICompatible(config, systemPrompt, userPrompt, 0.7, 'quests');
     const parsed = extractJsonObject<{
       quests?: Array<{
         title?: string;
@@ -394,15 +572,21 @@ Return ONLY valid JSON:
         };
       });
 
-      return { quests, usedFallback: false };
+      return {
+        quests,
+        usedFallback: false,
+        viaSharedProxy: res.viaSharedProxy,
+        remainingToday: res.remainingToday,
+      };
     }
 
     throw new Error('Invalid quests JSON structure');
   } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
     return {
       quests: createSyncedQuestsForActiveStep(activeStep, bd, lang),
       usedFallback: true,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: rawMsg === 'API_KEY_MISSING' || rawMsg === 'PROXY_UNAVAILABLE' ? undefined : rawMsg,
     };
   }
 }
@@ -418,18 +602,12 @@ export async function discoverPerksAndOpportunities(
   perks: DiscoveredPerk[];
   news: GrowthNewsItem[];
   usedFallback: boolean;
+  viaSharedProxy?: boolean;
+  remainingToday?: number;
   errorMessage?: string;
 }> {
   const city = player.city || 'Surabaya';
   const interest = player.rewardInterest || player.profession;
-
-  if (!config.apiKey.trim()) {
-    return {
-      perks: getDefaultDiscoveredPerks(city, player.profession, interest, lang),
-      news: getDefaultGrowthNews(city, player.profession, player.goal, lang),
-      usedFallback: true,
-    };
-  }
 
   const systemPrompt =
     'You are a practical career opportunities, free learning resources, and local lifestyle perk curator. Always return valid JSON only. Only include real, well-known official URLs when confident; otherwise leave sourceUrl empty string.';
@@ -466,7 +644,7 @@ Return ONLY valid JSON:
 Provide 4 perks (2 local deals for ${city} with cost 50-90 CR, 2 free internet resources/tools with cost 0) and 3 growth opportunities.`;
 
   try {
-    const res = await callOpenAICompatible(config, systemPrompt, userPrompt, 0.7);
+    const res = await callOpenAICompatible(config, systemPrompt, userPrompt, 0.7, 'perks');
     const parsed = extractJsonObject<{
       perks?: Array<{
         type?: string;
@@ -528,16 +706,23 @@ Provide 4 perks (2 local deals for ${city} with cost 50-90 CR, 2 free internet r
             }))
           : getDefaultGrowthNews(city, player.profession, player.goal, lang);
 
-      return { perks, news, usedFallback: false };
+      return {
+        perks,
+        news,
+        usedFallback: false,
+        viaSharedProxy: res.viaSharedProxy,
+        remainingToday: res.remainingToday,
+      };
     }
 
     throw new Error('Invalid perks/news JSON structure');
   } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
     return {
       perks: getDefaultDiscoveredPerks(city, player.profession, interest, lang),
       news: getDefaultGrowthNews(city, player.profession, player.goal, lang),
       usedFallback: true,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: rawMsg === 'API_KEY_MISSING' || rawMsg === 'PROXY_UNAVAILABLE' ? undefined : rawMsg,
     };
   }
 }

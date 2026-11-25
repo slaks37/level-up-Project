@@ -7,6 +7,8 @@ import {
   getRedirectResult,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  sendEmailVerification,
   updateProfile,
   signOut,
   onAuthStateChanged,
@@ -34,13 +36,23 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import type {
+  AdminAISecretConfig,
+  AIUsageLogRecord,
   DailyLogEntry,
   FirebaseRuntimeConfig,
   Language,
   PlayerProfile,
+  SharedAIPublicConfig,
+  UserAccountRecord,
 } from '../types';
 import { normalizePlayerProfile, PLAYER_SCHEMA_VERSION } from '../engine/science';
 import { loadRuntimeFirebaseConfig } from './storageService';
+
+export const BOOTSTRAP_ADMIN_EMAIL = (
+  import.meta.env.VITE_ADMIN_EMAIL || 'stefenlaksana.sl@gmail.com'
+)
+  .trim()
+  .toLowerCase();
 
 let firebaseApp: FirebaseApp | null = null;
 let firebaseAuth: Auth | null = null;
@@ -57,6 +69,15 @@ export function isFirebaseReady(): boolean {
 
 export function getActiveFirebaseProjectId(): string | null {
   return firebaseApp?.options?.projectId ?? null;
+}
+
+export async function getCurrentUserIdToken(): Promise<string | null> {
+  if (!firebaseAuth?.currentUser) return null;
+  try {
+    return await firebaseAuth.currentUser.getIdToken();
+  } catch {
+    return null;
+  }
 }
 
 export async function initFirebaseFromConfig(
@@ -89,10 +110,7 @@ export async function initFirebaseFromConfig(
     }
 
     activeConfigKey = key;
-
-    // Resolve any pending mobile redirect sign-in silently
     getRedirectResult(firebaseAuth).catch(() => {});
-
     return true;
   } catch (err) {
     console.error('[Firebase] Initialization failed:', err);
@@ -149,7 +167,18 @@ export async function signUpWithEmail(
   if (displayName.trim()) {
     await updateProfile(cred.user, { displayName: displayName.trim() });
   }
+  sendEmailVerification(cred.user).catch(() => {});
   return cred.user;
+}
+
+export async function sendPasswordReset(email: string): Promise<void> {
+  if (!firebaseAuth) throw new Error('Firebase Auth belum dikonfigurasi.');
+  await sendPasswordResetEmail(firebaseAuth, email.trim());
+}
+
+export async function sendCurrentUserVerificationEmail(): Promise<void> {
+  if (!firebaseAuth?.currentUser) throw new Error('Belum login.');
+  await sendEmailVerification(firebaseAuth.currentUser);
 }
 
 export async function signOutUser(): Promise<void> {
@@ -157,7 +186,43 @@ export async function signOutUser(): Promise<void> {
   await signOut(firebaseAuth);
 }
 
-export async function upsertUserMeta(user: User, lang: Language): Promise<void> {
+// =========================================================================
+// ADMIN ROLE DETECTION & MANAGEMENT
+// =========================================================================
+export async function checkIsUserAdmin(user: User | null): Promise<{
+  isAdmin: boolean;
+  isUnverifiedBootstrapAdmin: boolean;
+}> {
+  if (!user) return { isAdmin: false, isUnverifiedBootstrapAdmin: false };
+  const emailLower = (user.email || '').trim().toLowerCase();
+  const isBootstrapEmail = Boolean(emailLower && emailLower === BOOTSTRAP_ADMIN_EMAIL);
+
+  if (isBootstrapEmail && user.emailVerified) {
+    return { isAdmin: true, isUnverifiedBootstrapAdmin: false };
+  }
+
+  if (firestoreDb) {
+    try {
+      const snap = await getDoc(doc(firestoreDb, 'admins', user.uid));
+      if (snap.exists()) {
+        return { isAdmin: true, isUnverifiedBootstrapAdmin: false };
+      }
+    } catch {
+      // ignore permission/offline errors
+    }
+  }
+
+  return {
+    isAdmin: false,
+    isUnverifiedBootstrapAdmin: isBootstrapEmail && !user.emailVerified,
+  };
+}
+
+export async function upsertUserMeta(
+  user: User,
+  lang: Language,
+  isAdmin = false
+): Promise<void> {
   if (!firestoreDb) return;
   const userRef = doc(firestoreDb, 'users', user.uid);
   const existing = await getDoc(userRef);
@@ -171,23 +236,220 @@ export async function upsertUserMeta(user: User, lang: Language): Promise<void> 
       displayName: safeName,
       email: safeEmail,
       language: lang,
+      role: isAdmin ? 'admin' : 'user',
+      status: 'active',
+      aiRequestsToday: 0,
+      aiTotalRequests: 0,
+      aiQuotaDate: '',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
   } else {
+    const data = existing.data() || {};
     await updateDoc(userRef, {
       displayName: safeName,
       email: safeEmail,
       language: lang,
+      role: data.role || (isAdmin ? 'admin' : 'user'),
+      status: data.status || 'active',
+      aiRequestsToday: typeof data.aiRequestsToday === 'number' ? data.aiRequestsToday : 0,
+      aiTotalRequests: typeof data.aiTotalRequests === 'number' ? data.aiTotalRequests : 0,
+      aiQuotaDate: typeof data.aiQuotaDate === 'string' ? data.aiQuotaDate : '',
       updatedAt: serverTimestamp(),
     });
   }
 }
 
-/**
- * Strips any unexpected fields (and guarantees no API keys ever enter Firestore)
- * to comply strictly with `firestore.rules` `hasOnly(...)` validation.
- */
+// =========================================================================
+// SHARED AI PUBLIC CONFIG & ADMIN SECRETS
+// =========================================================================
+export async function fetchSharedAIPublicConfig(): Promise<SharedAIPublicConfig | null> {
+  if (!firestoreDb) return null;
+  const snap = await getDoc(doc(firestoreDb, 'appConfig', 'aiPublic'));
+  if (!snap.exists()) return null;
+  const d = snap.data();
+  return {
+    enabled: Boolean(d.enabled),
+    providerName: String(d.providerName || 'Agnes AI'),
+    model: String(d.model || 'agnes-2.5-flash'),
+    dailyLimit: Number(d.dailyLimit ?? 20),
+    proxyConfigured: Boolean(d.proxyConfigured),
+    maintenanceNotice: String(d.maintenanceNotice || ''),
+    updatedBy: String(d.updatedBy || ''),
+  };
+}
+
+export function subscribeSharedAIPublicConfig(
+  callback: (cfg: SharedAIPublicConfig | null) => void
+): Unsubscribe {
+  if (!firestoreDb) return () => {};
+  return onSnapshot(
+    doc(firestoreDb, 'appConfig', 'aiPublic'),
+    (snap) => {
+      if (!snap.exists()) {
+        callback(null);
+        return;
+      }
+      const d = snap.data();
+      callback({
+        enabled: Boolean(d.enabled),
+        providerName: String(d.providerName || 'Agnes AI'),
+        model: String(d.model || 'agnes-2.5-flash'),
+        dailyLimit: Number(d.dailyLimit ?? 20),
+        proxyConfigured: Boolean(d.proxyConfigured),
+        maintenanceNotice: String(d.maintenanceNotice || ''),
+        updatedBy: String(d.updatedBy || ''),
+      });
+    },
+    () => callback(null)
+  );
+}
+
+export async function fetchAdminAISecret(): Promise<AdminAISecretConfig | null> {
+  if (!firestoreDb) return null;
+  const snap = await getDoc(doc(firestoreDb, 'adminSecrets', 'aiProvider'));
+  if (!snap.exists()) return null;
+  const d = snap.data();
+  return {
+    baseUrl: String(d.baseUrl || 'https://apihub.agnes-ai.com/v1'),
+    model: String(d.model || 'agnes-2.5-flash'),
+    apiKey: String(d.apiKey || ''),
+    enabled: Boolean(d.enabled),
+    dailyLimit: Number(d.dailyLimit ?? 20),
+    updatedBy: String(d.updatedBy || ''),
+  };
+}
+
+export async function saveAdminSharedAIConfig(
+  adminUser: User,
+  payload: {
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+    enabled: boolean;
+    dailyLimit: number;
+    maintenanceNotice: string;
+  }
+): Promise<void> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  const updatedBy = (adminUser.email || adminUser.uid).slice(0, 128);
+  const cleanLimit = Math.max(0, Math.min(500, Math.round(payload.dailyLimit)));
+
+  await setDoc(doc(firestoreDb, 'adminSecrets', 'aiProvider'), {
+    baseUrl: payload.baseUrl.trim().slice(0, 300),
+    model: payload.model.trim().slice(0, 80),
+    apiKey: payload.apiKey.trim().slice(0, 500),
+    enabled: Boolean(payload.enabled),
+    dailyLimit: cleanLimit,
+    updatedAt: serverTimestamp(),
+    updatedBy,
+  });
+
+  await setDoc(doc(firestoreDb, 'appConfig', 'aiPublic'), {
+    enabled: Boolean(payload.enabled),
+    providerName: 'Agnes AI',
+    model: payload.model.trim().slice(0, 80),
+    dailyLimit: cleanLimit,
+    proxyConfigured: Boolean(payload.apiKey.trim()),
+    maintenanceNotice: payload.maintenanceNotice.trim().slice(0, 300),
+    updatedAt: serverTimestamp(),
+    updatedBy,
+  });
+}
+
+export async function fetchAllUsersForAdmin(): Promise<UserAccountRecord[]> {
+  if (!firestoreDb) return [];
+  const q = query(collection(firestoreDb, 'users'), orderBy('updatedAt', 'desc'), limit(200));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      ownerUid: String(data.ownerUid || d.id),
+      displayName: String(data.displayName || 'Hunter'),
+      email: String(data.email || ''),
+      language: data.language === 'en' ? 'en' : 'id',
+      role: data.role === 'admin' ? 'admin' : 'user',
+      status: data.status === 'suspended' ? 'suspended' : 'active',
+      aiRequestsToday: Number(data.aiRequestsToday || 0),
+      aiTotalRequests: Number(data.aiTotalRequests || 0),
+      aiQuotaDate: String(data.aiQuotaDate || ''),
+    };
+  });
+}
+
+export async function updateUserStatusByAdmin(
+  uid: string,
+  status: 'active' | 'suspended'
+): Promise<void> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  await updateDoc(doc(firestoreDb, 'users', uid), {
+    status,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function resetUserDailyQuota(uid: string): Promise<void> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  await updateDoc(doc(firestoreDb, 'users', uid), {
+    aiRequestsToday: 0,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function grantOrRevokeAdmin(
+  actingAdmin: User,
+  target: UserAccountRecord,
+  makeAdmin: boolean
+): Promise<void> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  const adminRef = doc(firestoreDb, 'admins', target.ownerUid);
+  const userRef = doc(firestoreDb, 'users', target.ownerUid);
+
+  if (makeAdmin) {
+    await setDoc(adminRef, {
+      uid: target.ownerUid,
+      email: target.email || target.displayName,
+      grantedBy: (actingAdmin.email || actingAdmin.uid).slice(0, 128),
+      createdAt: serverTimestamp(),
+    });
+  } else {
+    await deleteDoc(adminRef);
+  }
+
+  await updateDoc(userRef, {
+    role: makeAdmin ? 'admin' : 'user',
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function fetchAdminUsageLogs(maxCount = 40): Promise<AIUsageLogRecord[]> {
+  if (!firestoreDb) return [];
+  const q = query(
+    collection(firestoreDb, 'aiUsageLogs'),
+    orderBy('createdAt', 'desc'),
+    limit(maxCount)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const data = d.data();
+    const ts = data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : '';
+    return {
+      id: d.id,
+      uid: String(data.uid || ''),
+      email: String(data.email || ''),
+      feature: String(data.feature || 'chat'),
+      model: String(data.model || ''),
+      status:
+        data.status === 'error' || data.status === 'quota_exceeded' ? data.status : 'ok',
+      latencyMs: Number(data.latencyMs || 0),
+      createdAt: ts,
+    };
+  });
+}
+
+// =========================================================================
+// USER PROFILE & DAILY LOGS SYNC
+// =========================================================================
 function sanitizeProfileForFirestore(uid: string, player: PlayerProfile) {
   return {
     ownerUid: uid,

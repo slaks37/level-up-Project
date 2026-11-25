@@ -22,6 +22,8 @@ export const DEFAULT_AI_CONFIG: AIConfig = {
   model: import.meta.env.VITE_AI_MODEL || 'agnes-2.5-flash',
   apiKey: import.meta.env.VITE_AI_API_KEY || '',
   useDevProxy: false,
+  preferSharedProxy: true,
+  proxyBaseUrl: import.meta.env.VITE_AI_PROXY_URL || '',
 };
 
 export function loadLocalPlayer(lang: Language): PlayerProfile | null {
@@ -112,6 +114,12 @@ export function loadAIConfig(): AIConfig {
       model: parsed.model?.trim() || DEFAULT_AI_CONFIG.model,
       apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : DEFAULT_AI_CONFIG.apiKey,
       useDevProxy: Boolean(parsed.useDevProxy),
+      preferSharedProxy:
+        typeof parsed.preferSharedProxy === 'boolean' ? parsed.preferSharedProxy : true,
+      proxyBaseUrl:
+        typeof parsed.proxyBaseUrl === 'string'
+          ? parsed.proxyBaseUrl.trim()
+          : DEFAULT_AI_CONFIG.proxyBaseUrl,
     };
   } catch {
     return { ...DEFAULT_AI_CONFIG };

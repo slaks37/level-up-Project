@@ -1,17 +1,28 @@
 # Dependencies
 node_modules
+server/node_modules
+functions/node_modules
 .pnp
 .pnp.*
 
 # Build outputs
 dist
 dist-ssr
+server/dist
+functions/lib
 *.local
 
-# Environment secrets
+# Environment secrets & local server vault
 .env
 .env.local
 .env.*.local
+server/.env
+server/.env.local
+server/.secrets
+functions/.env
+functions/.env.local
+*service-account*.json
+*firebase-adminsdk*.json
 
 # Firebase local cache
 .firebase

@@ -192,6 +192,52 @@ export interface AIConfig {
   model: string;
   apiKey: string;
   useDevProxy: boolean;
+  preferSharedProxy?: boolean;
+  proxyBaseUrl?: string;
+}
+
+export interface SharedAIPublicConfig {
+  enabled: boolean;
+  providerName: string;
+  model: string;
+  dailyLimit: number;
+  proxyConfigured: boolean;
+  maintenanceNotice: string;
+  updatedBy?: string;
+}
+
+export interface AdminAISecretConfig {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  enabled: boolean;
+  dailyLimit: number;
+  updatedBy?: string;
+}
+
+export interface UserAccountRecord {
+  ownerUid: string;
+  displayName: string;
+  email: string;
+  language: Language;
+  role: 'user' | 'admin';
+  status: 'active' | 'suspended';
+  aiRequestsToday: number;
+  aiTotalRequests: number;
+  aiQuotaDate: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AIUsageLogRecord {
+  id: string;
+  uid: string;
+  email: string;
+  feature: string;
+  model: string;
+  status: 'ok' | 'error' | 'quota_exceeded';
+  latencyMs: number;
+  createdAt: string;
 }
 
 export interface FirebaseRuntimeConfig {
