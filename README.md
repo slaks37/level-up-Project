@@ -1,12 +1,13 @@
 # LEVEL UP SYSTEM // Studio OS v3.3 (PWA + Firebase + Admin Shared AI)
 
-> **Live App (HP & Laptop PWA):** https://level-up-os-sl26.web.app
-> **Admin Control Center:** https://level-up-os-sl26.web.app/admin
+> [Level Up PWA](https://levelup.sociopreneur.online/)
+>
+> [Admin Control Center](https://go-levelup.sociopreneur.online/)
 
 Aplikasi web progresif (**PWA**) lintas perangkat untuk **HP (Android / iPhone)** dan **Laptop (macOS / Windows / Linux)** yang menggabungkan pelacak karier, belajar, dan kebugaran berbasis jurnal ilmiah dengan:
 
 - **Sistem Login Lengkap (Email + Password, Daftar, Reset Password & Google Sign-In)** melalui Firebase Authentication.
-- **Admin Control Center (`/admin`)**:
+- **Admin Control Center**:
   - Atur **Shared Agnes AI API Key** agar semua user bisa memakai AI secara aman tanpa harus mengisi API key sendiri (API key tersimpan **100% di sisi server**, tidak pernah terekspos ke browser user).
   - Atur **kuota harian AI per user**, model default (`agnes-2.5-flash` / `agnes-3.0-flash` / `agnes-2.5-pro-beta`), pesan pengumuman, dan tombol aktif/nonaktif global.
   - **Manajemen User**: lihat daftar user terdaftar, pantau pemakaian AI, reset kuota harian, suspend/aktifkan akun, dan angkat/cabut admin.
@@ -69,6 +70,10 @@ npm run dev:full
 npm run build
 npx -y firebase-tools@latest deploy --only firestore,hosting
 ```
+
+Hubungkan `levelup.sociopreneur.online` dan `go-levelup.sociopreneur.online` ke situs Firebase Hosting `level-up-os-sl26`. Tambahkan kedua hostname ke daftar Authorized Domains di Firebase Authentication. Sesi login dan data offline tersimpan per domain browser.
+
+Rute `/admin` tetap tersedia di lingkungan lokal dan di `level-up-os-sl26.web.app`. Pada domain publik `levelup.sociopreneur.online`, rute ini mengarahkan pengunjung ke domain admin.
 
 ### B. Deploy Secure Shared AI Proxy Server (Pilih Salah Satu)
 - **Opsi 1 — Gratis di Render (tanpa kartu kredit):**

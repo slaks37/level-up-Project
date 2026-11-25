@@ -21,7 +21,8 @@ import {
 
 interface AuthViewProps {
   lang: Language;
-  onContinueOffline: () => void;
+  adminOnly?: boolean;
+  onExit: () => void;
   onNotify: (msg: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
@@ -57,7 +58,7 @@ function translateAuthError(err: unknown, lang: Language): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export const AuthView: React.FC<AuthViewProps> = ({ lang, onContinueOffline, onNotify }) => {
+export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onExit, onNotify }) => {
   const [mode, setMode] = useState<'login' | 'register' | 'reset'>('login');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -145,7 +146,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, onContinueOffline, onN
         <div className="blender-bar px-4 py-2 flex items-center justify-between">
           <span className="font-mono text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
             <ShieldCheck className="w-4 h-4 text-sky-600" />
-            AUTH GATE // CLOUD ACCOUNT ACCESS
+            {adminOnly ? 'AUTH GATE // ADMIN ACCESS' : 'AUTH GATE // CLOUD ACCOUNT ACCESS'}
           </span>
           <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-900 text-orange-400">
             FIREBASE AUTH
@@ -158,17 +159,21 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, onContinueOffline, onN
               <Cpu className="w-6 h-6" />
             </div>
             <h1 className="font-hud font-bold text-2xl text-slate-900 tracking-wide">
-              LEVEL UP SYSTEM
+              {adminOnly ? 'ADMIN CONTROL CENTER' : 'LEVEL UP SYSTEM'}
             </h1>
             <p className="text-xs text-slate-600">
-              {lang === 'id'
-                ? 'Masuk dengan Email atau Google untuk sinkronisasi otomatis HP ↔ Laptop dan akses Shared Agnes AI.'
-                : 'Sign in with Email or Google for real-time Phone ↔ Laptop sync and Shared Agnes AI access.'}
+              {adminOnly
+                ? lang === 'id'
+                  ? 'Masuk dengan akun yang memiliki akses admin.'
+                  : 'Sign in with an account that has admin access.'
+                : lang === 'id'
+                  ? 'Masuk dengan Email atau Google untuk sinkronisasi otomatis HP ↔ Laptop dan akses Shared Agnes AI.'
+                  : 'Sign in with Email or Google for real-time Phone ↔ Laptop sync and Shared Agnes AI access.'}
             </p>
           </div>
 
           {/* Mode Tabs */}
-          <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded border border-slate-200 font-hud font-bold text-xs">
+          <div className={`grid ${adminOnly ? 'grid-cols-2' : 'grid-cols-3'} gap-1 bg-slate-100 p-1 rounded border border-slate-200 font-hud font-bold text-xs`}>
             <button
               type="button"
               onClick={() => setMode('login')}
@@ -178,17 +183,19 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, onContinueOffline, onN
             >
               {lang === 'id' ? 'MASUK' : 'SIGN IN'}
             </button>
-            <button
-              type="button"
-              onClick={() => setMode('register')}
-              className={`py-1.5 rounded transition ${
-                mode === 'register'
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {lang === 'id' ? 'DAFTAR' : 'REGISTER'}
-            </button>
+            {!adminOnly && (
+              <button
+                type="button"
+                onClick={() => setMode('register')}
+                className={`py-1.5 rounded transition ${
+                  mode === 'register'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {lang === 'id' ? 'DAFTAR' : 'REGISTER'}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setMode('reset')}
@@ -330,12 +337,16 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, onContinueOffline, onN
           <div className="pt-1 border-t border-slate-200 text-center">
             <button
               type="button"
-              onClick={onContinueOffline}
+              onClick={onExit}
               className="text-xs font-semibold text-slate-500 hover:text-slate-800 underline"
             >
-              {lang === 'id'
-                ? 'Lanjut tanpa login (Mode Offline Lokal saja)'
-                : 'Continue without login (Local Offline Mode only)'}
+              {adminOnly
+                ? lang === 'id'
+                  ? 'Kembali ke Level Up'
+                  : 'Back to Level Up'
+                : lang === 'id'
+                  ? 'Lanjut tanpa login (Mode Offline Lokal saja)'
+                  : 'Continue without login (Local Offline Mode only)'}
             </button>
           </div>
         </div>

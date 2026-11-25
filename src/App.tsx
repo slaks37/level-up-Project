@@ -89,6 +89,7 @@ import {
 } from './components/Modals';
 import { SettingsModal } from './components/SettingsModal';
 import { ToastContainer } from './components/ToastContainer';
+import { ADMIN_HOST, ADMIN_URL, isAdminPath, PUBLIC_HOST, PUBLIC_URL } from './routes';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -111,6 +112,8 @@ type ActiveModal =
   | { type: 'completeDay' };
 
 export default function App() {
+  const isDedicatedAdminHost = window.location.hostname === ADMIN_HOST;
+  const isPublicHost = window.location.hostname === PUBLIC_HOST;
   const [lang, setLang] = useState<Language>(() => loadSavedLanguage());
   const [player, setPlayer] = useState<PlayerProfile | null>(() =>
     loadLocalPlayer(loadSavedLanguage())
@@ -133,7 +136,7 @@ export default function App() {
   const [guestMode, setGuestMode] = useState<boolean>(() => Boolean(loadLocalPlayer('id')));
   const [showAuthScreen, setShowAuthScreen] = useState(false);
   const [isAdminView, setIsAdminView] = useState<boolean>(
-    () => typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')
+    () => isDedicatedAdminHost || isAdminPath(window.location.pathname)
   );
   const [isAdmin, setIsAdmin] = useState(false);
   const [isUnverifiedBootstrapAdmin, setIsUnverifiedBootstrapAdmin] = useState(false);
@@ -172,16 +175,25 @@ export default function App() {
     []
   );
 
-  // Browser back/forward sync for /admin path
+  // Browser back/forward sync for the legacy /admin route.
   useEffect(() => {
+    if (isDedicatedAdminHost || isPublicHost) return;
     const onPopState = () => {
-      setIsAdminView(window.location.pathname.startsWith('/admin'));
+      setIsAdminView(isAdminPath(window.location.pathname));
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, []);
+  }, [isDedicatedAdminHost, isPublicHost]);
 
   const navigateAdminView = (open: boolean) => {
+    if (isDedicatedAdminHost && !open) {
+      window.location.assign(PUBLIC_URL);
+      return;
+    }
+    if (isPublicHost && open) {
+      window.location.assign(ADMIN_URL);
+      return;
+    }
     setIsAdminView(open);
     const targetPath = open ? '/admin' : '/';
     if (window.location.pathname !== targetPath) {
@@ -936,7 +948,7 @@ export default function App() {
         isAdminView={isAdminView}
         onToggleAdminView={() => navigateAdminView(!isAdminView)}
         onOpenAuthScreen={() => setShowAuthScreen(true)}
-        canInstallPWA={Boolean(installPrompt)}
+        canInstallPWA={!isDedicatedAdminHost && Boolean(installPrompt)}
         onInstallPWA={() => void handleInstallPWA()}
         onOpenScience={() => setModal({ type: 'science' })}
         onOpenSettings={(tab = 'ai') => setModal({ type: 'settings', tab })}
@@ -965,7 +977,12 @@ export default function App() {
         ) : shouldShowAuthGate ? (
           <AuthView
             lang={lang}
-            onContinueOffline={() => {
+            adminOnly={isDedicatedAdminHost}
+            onExit={() => {
+              if (isDedicatedAdminHost) {
+                navigateAdminView(false);
+                return;
+              }
               setGuestMode(true);
               setShowAuthScreen(false);
               if (isAdminView) navigateAdminView(false);
