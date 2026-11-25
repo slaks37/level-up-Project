@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- Corner Tactical Brackets -->
+  <path d="M56 128 V68 H116" fill="none" stroke="#38bdf8" stroke-width="14" stroke-linecap="square"/>
+  <path d="M456 384 V444 H396" fill="none" stroke="#ea580c" stroke-width="14" stroke-linecap="square"/>
+  <!-- Orbital Ring -->
+  <ellipse cx="256" cy="256" rx="164" ry="64" transform="rotate(-24 256 256)" fill="none" stroke="#ea580c" stroke-width="14" opacity="0.9"/>
+  <!-- Aether Octahedron Core -->
+  <polygon points="256,104 374,256 256,408 138,256" fill="url(#core)"/>
+  <polygon points="256,104 374,256 256,256" fill="#7dd3fc" opacity="0.55"/>
+  <polygon points="256,408 138,256 256,256" fill="#0369a1" opacity="0.55"/>
+  <polyline points="256,104 374,256 256,408 138,256 256,104" fill="none" stroke="#e0f2fe" stroke-width="8"/>
+  <!-- Upward Level Chevron -->
+  <path d="M214 276 L256 226 L298 276" fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

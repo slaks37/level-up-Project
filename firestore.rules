@@ -1,0 +1,376 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model — LEVEL UP SYSTEM PWA
+// ===============================================================
+//
+// All user data is strictly private per authenticated Firebase user
+// (request.auth.uid == userId). No public or cross-user access is allowed.
+// No API keys or external AI credentials are permitted in Firestore.
+//
+// 1. Collection: users/{userId} (optional account metadata document)
+//    Document ID: {userId} (Firebase Auth UID)
+//    Fields (all required; strict hasOnly):
+//      - ownerUid: string == userId (immutable on update)
+//      - displayName: string (1..120 chars)
+//      - email: string (0..254 chars; empty or valid email format)
+//      - language: string in ['id', 'en']
+//      - createdAt: timestamp (immutable on update)
+//      - updatedAt: timestamp
+//
+// 2. Collection: users/{userId}/profile/{docId}
+//    Document ID: strictly 'main'
+//    Fields (all 37 required; strict hasOnly; NO API keys permitted):
+//      - ownerUid: string == userId (immutable on update)
+//      - schemaVersion: int (1..20)
+//      - updatedAt: timestamp
+//      - name: string (1..100 chars)
+//      - gender: string in ['male', 'female']
+//      - age: number (10..120)
+//      - height: number (100..250)
+//      - weight: number (25..300)
+//      - city: string (0..100 chars)
+//      - rewardInterest: string (0..300 chars)
+//      - bio: map { bmi: number, bmiCategory: string(0..60), bmr: number, proteinTarget: number }
+//      - profession: string (1..160 chars)
+//      - classTitle: string (1..120 chars)
+//      - goal: string (1..300 chars)
+//      - targetLevel: int (1..999)
+//      - dailyBreakdown: map { total, study, work, fitness: number >= 0 }
+//      - dailyDurationLog: map { study, work, fitness: number >= 0 }
+//      - coachAdvice: string (0..1000 chars)
+//      - level: int (1..999)
+//      - exp: int (0..10000000)
+//      - maxExp: int (1..10000000)
+//      - gold: int (0..10000000)
+//      - streak: int (0..100000)
+//      - coreCharge: int (0..4)
+//      - sleepCondition: string in ['poor', 'moderate', 'optimal']
+//      - nutritionCondition: string in ['deficit', 'balanced', 'high_protein']
+//      - stats: map { str, vit, int, agi, cha: number >= 0 }
+//      - stages: list (size <= 20)
+//      - quests: list (size <= 100)
+//      - shadows: list (size <= 200)
+//      - skillProgress: map (size <= 200; no secret/API-key field names)
+//      - dreamSteps: list (size <= 50)
+//      - rewards: list (size <= 50)
+//      - discoveredPerks: list (size <= 30)
+//      - growthNews: list (size <= 30)
+//      - groundingSources: list (size <= 30)
+//      - boss: map { name: string(0..300), desc: string(0..500), hp: number, maxHp: number }
+//
+// 3. Collection: users/{userId}/dailyLogs/{dateKey}
+//    Document ID: {dateKey} matching YYYY-MM-DD (format & month/day range check)
+//    Fields (all 13 required; strict hasOnly):
+//      - ownerUid: string == userId (immutable on update)
+//      - dateKey: string == {dateKey} doc ID (immutable on update)
+//      - completedTasks: int (0..100)
+//      - totalTasks: int (0..100)
+//      - studyMinutes: number (0..1440)
+//      - workMinutes: number (0..1440)
+//      - fitnessMinutes: number (0..1440)
+//      - expEarned: int (0..100000)
+//      - goldEarned: int (0..100000)
+//      - streakAfter: int (0..100000)
+//      - sleepCondition: string in ['poor', 'moderate', 'optimal']
+//      - nutritionCondition: string in ['deficit', 'balanced', 'high_protein']
+//      - createdAt: timestamp (preserved or server request.time on same-day upsert)
+//
+// Note: Because users/{userId} is optional, subcollections do not require
+// the parent users/{userId} document to exist. Timestamps are validated by
+// type rather than request.time equality so offline-first PWA sync works
+// reliably across clock skew and delayed reconnection.
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Core Auth & Ownership Helpers
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function uidUnchanged(userId) {
+      return 'ownerUid' in request.resource.data &&
+        request.resource.data.ownerUid is string &&
+        request.resource.data.ownerUid == userId &&
+        request.resource.data.ownerUid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return 'ownerUid' in request.resource.data &&
+        request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function hasExactKeys(mapData, allowedKeys) {
+      return mapData is map &&
+        mapData.keys().hasOnly(allowedKeys) &&
+        mapData.keys().hasAll(allowedKeys);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // ===============================================================
+    // Primitive & Format Validation Helpers
+    // ===============================================================
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isIntInRange(val, minVal, maxVal) {
+      return val is int && val >= minVal && val <= maxVal;
+    }
+
+    function isNumberInRange(val, minVal, maxVal) {
+      return val is number && val >= minVal && val <= maxVal;
+    }
+
+    function isValidList(val, maxSize) {
+      return val is list && val.size() <= maxSize;
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+
+    // Format + month/day range validation (does not enforce calendar month lengths).
+    function isValidDateKey(dateKey) {
+      return dateKey is string &&
+        dateKey.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
+    }
+
+    function isValidSleepCondition(val) {
+      return val is string && val in ['poor', 'moderate', 'optimal'];
+    }
+
+    function isValidNutritionCondition(val) {
+      return val is string && val in ['deficit', 'balanced', 'high_protein'];
+    }
+
+    // ===============================================================
+    // Nested Map Validators (Profile)
+    // ===============================================================
+
+    function isValidBio(bio) {
+      return hasExactKeys(bio, ['bmi', 'bmiCategory', 'bmr', 'proteinTarget']) &&
+        isNumberInRange(bio.bmi, 0, 200) &&
+        isValidString(bio.bmiCategory, 0, 60) &&
+        isNumberInRange(bio.bmr, 0, 20000) &&
+        isNumberInRange(bio.proteinTarget, 0, 1000);
+    }
+
+    function isValidDailyBreakdown(bd) {
+      return hasExactKeys(bd, ['total', 'study', 'work', 'fitness']) &&
+        isNumberInRange(bd.total, 0, 86400) &&
+        isNumberInRange(bd.study, 0, 86400) &&
+        isNumberInRange(bd.work, 0, 86400) &&
+        isNumberInRange(bd.fitness, 0, 86400);
+    }
+
+    function isValidDailyDurationLog(log) {
+      return hasExactKeys(log, ['study', 'work', 'fitness']) &&
+        isNumberInRange(log.study, 0, 86400) &&
+        isNumberInRange(log.work, 0, 86400) &&
+        isNumberInRange(log.fitness, 0, 86400);
+    }
+
+    // Bracket indexing used on 'int' because 'int' is a reserved keyword in CEL.
+    function isValidStats(s) {
+      return hasExactKeys(s, ['str', 'vit', 'int', 'agi', 'cha']) &&
+        isNumberInRange(s['str'], 0, 1000000) &&
+        isNumberInRange(s['vit'], 0, 1000000) &&
+        isNumberInRange(s['int'], 0, 1000000) &&
+        isNumberInRange(s['agi'], 0, 1000000) &&
+        isNumberInRange(s['cha'], 0, 1000000);
+    }
+
+    function isValidSkillProgress(sp) {
+      return sp is map &&
+        sp.size() <= 200 &&
+        !sp.keys().hasAny([
+          'apiKey', 'geminiApiKey', 'openaiApiKey',
+          'secretKey', 'privateKey', 'accessToken'
+        ]);
+    }
+
+    function isValidBoss(boss) {
+      return hasExactKeys(boss, ['name', 'desc', 'hp', 'maxHp']) &&
+        isValidString(boss.name, 0, 300) &&
+        isValidString(boss.desc, 0, 500) &&
+        isNumberInRange(boss.hp, 0, 10000000) &&
+        isNumberInRange(boss.maxHp, 1, 10000000);
+    }
+
+    // ===============================================================
+    // Domain Validators (Mandatory in BOTH create and update)
+    // ===============================================================
+
+    function isValidUserAccount(data, userId) {
+      let allowedFields = [
+        'ownerUid', 'displayName', 'email', 'language', 'createdAt', 'updatedAt'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        data.ownerUid is string && data.ownerUid == userId &&
+        isValidString(data.displayName, 1, 120) &&
+        isValidString(data.email, 0, 254) &&
+        (data.email.size() == 0 || isValidEmail(data.email)) &&
+        data.language is string && data.language in ['id', 'en'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidProfile(data, userId) {
+      let allowedFields = [
+        'ownerUid', 'schemaVersion', 'updatedAt',
+        'name', 'gender', 'age', 'height', 'weight',
+        'city', 'rewardInterest', 'bio',
+        'profession', 'classTitle', 'goal', 'targetLevel',
+        'dailyBreakdown', 'dailyDurationLog', 'coachAdvice',
+        'level', 'exp', 'maxExp', 'gold', 'streak', 'coreCharge',
+        'sleepCondition', 'nutritionCondition',
+        'stats', 'stages', 'quests', 'shadows', 'skillProgress',
+        'dreamSteps', 'rewards', 'discoveredPerks',
+        'growthNews', 'groundingSources', 'boss'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        data.ownerUid is string && data.ownerUid == userId &&
+        isIntInRange(data.schemaVersion, 1, 20) &&
+        data.updatedAt is timestamp &&
+        isValidString(data.name, 1, 100) &&
+        data.gender is string && data.gender in ['male', 'female'] &&
+        isNumberInRange(data.age, 10, 120) &&
+        isNumberInRange(data.height, 100, 250) &&
+        isNumberInRange(data.weight, 25, 300) &&
+        isValidString(data.city, 0, 100) &&
+        isValidString(data.rewardInterest, 0, 300) &&
+        isValidBio(data.bio) &&
+        isValidString(data.profession, 1, 160) &&
+        isValidString(data.classTitle, 1, 120) &&
+        isValidString(data.goal, 1, 300) &&
+        isIntInRange(data.targetLevel, 1, 999) &&
+        isValidDailyBreakdown(data.dailyBreakdown) &&
+        isValidDailyDurationLog(data.dailyDurationLog) &&
+        isValidString(data.coachAdvice, 0, 1000) &&
+        isIntInRange(data.level, 1, 999) &&
+        isIntInRange(data.exp, 0, 10000000) &&
+        isIntInRange(data.maxExp, 1, 10000000) &&
+        isIntInRange(data.gold, 0, 10000000) &&
+        isIntInRange(data.streak, 0, 100000) &&
+        isIntInRange(data.coreCharge, 0, 4) &&
+        isValidSleepCondition(data.sleepCondition) &&
+        isValidNutritionCondition(data.nutritionCondition) &&
+        isValidStats(data.stats) &&
+        isValidList(data.stages, 20) &&
+        isValidList(data.quests, 100) &&
+        isValidList(data.shadows, 200) &&
+        isValidSkillProgress(data.skillProgress) &&
+        isValidList(data.dreamSteps, 50) &&
+        isValidList(data.rewards, 50) &&
+        isValidList(data.discoveredPerks, 30) &&
+        isValidList(data.growthNews, 30) &&
+        isValidList(data.groundingSources, 30) &&
+        isValidBoss(data.boss);
+    }
+
+    function isValidDailyLog(data, userId, dateKey) {
+      let allowedFields = [
+        'ownerUid', 'dateKey', 'completedTasks', 'totalTasks',
+        'studyMinutes', 'workMinutes', 'fitnessMinutes',
+        'expEarned', 'goldEarned', 'streakAfter',
+        'sleepCondition', 'nutritionCondition', 'createdAt'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        data.ownerUid is string && data.ownerUid == userId &&
+        data.dateKey is string && data.dateKey == dateKey &&
+        isIntInRange(data.completedTasks, 0, 100) &&
+        isIntInRange(data.totalTasks, 0, 100) &&
+        isNumberInRange(data.studyMinutes, 0, 1440) &&
+        isNumberInRange(data.workMinutes, 0, 1440) &&
+        isNumberInRange(data.fitnessMinutes, 0, 1440) &&
+        isIntInRange(data.expEarned, 0, 100000) &&
+        isIntInRange(data.goldEarned, 0, 100000) &&
+        isIntInRange(data.streakAfter, 0, 100000) &&
+        isValidSleepCondition(data.sleepCondition) &&
+        isValidNutritionCondition(data.nutritionCondition) &&
+        data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Optional account metadata document (private per owner)
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+        uidUnchanged(userId) &&
+        isValidUserAccount(request.resource.data, userId);
+      allow update: if isOwner(userId) &&
+        uidNotModified() &&
+        areImmutableFieldsUnchanged(['ownerUid', 'createdAt']) &&
+        isValidUserAccount(request.resource.data, userId);
+      allow delete: if isOwner(userId);
+
+      // Main player profile document (strictly docId == 'main', no API keys)
+      match /profile/{docId} {
+        allow read: if isOwner(userId) && docId == 'main';
+        allow create: if isOwner(userId) &&
+          docId == 'main' &&
+          uidUnchanged(userId) &&
+          isValidProfile(request.resource.data, userId);
+        allow update: if isOwner(userId) &&
+          docId == 'main' &&
+          uidNotModified() &&
+          areImmutableFieldsUnchanged(['ownerUid']) &&
+          isValidProfile(request.resource.data, userId);
+        allow delete: if isOwner(userId) && docId == 'main';
+      }
+
+      // Daily progress logs keyed by YYYY-MM-DD
+      match /dailyLogs/{dateKey} {
+        allow get: if isOwner(userId) && isValidDateKey(dateKey);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) &&
+          isValidDateKey(dateKey) &&
+          uidUnchanged(userId) &&
+          isValidDailyLog(request.resource.data, userId, dateKey);
+        allow update: if isOwner(userId) &&
+          isValidDateKey(dateKey) &&
+          uidNotModified() &&
+          areImmutableFieldsUnchanged(['ownerUid', 'dateKey']) &&
+          (request.resource.data.createdAt == resource.data.createdAt ||
+           request.resource.data.createdAt == request.time) &&
+          isValidDailyLog(request.resource.data, userId, dateKey);
+        allow delete: if isOwner(userId) && isValidDateKey(dateKey);
+      }
+    }
+
+    // Default deny all other paths and subcollections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

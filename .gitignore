@@ -1,0 +1,28 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.*
+
+# Build outputs
+dist
+dist-ssr
+*.local
+
+# Environment secrets
+.env
+.env.local
+.env.*.local
+
+# Firebase local cache
+.firebase
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# OS & Editors
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.swp
+*.swo
