@@ -22,7 +22,7 @@ import {
   calculateBiometrics,
   computeDailyDurationBreakdown,
   createInitialPlayerProfile,
-  createSyncedQuestsForActiveStep,
+  createDefaultDreamSteps,
   getTodayDateKey,
   normalizePlayerProfile,
   playSFX,
@@ -55,16 +55,14 @@ import {
   subscribeSharedAIPublicConfig,
   upsertUserMeta,
 } from './services/firebaseService';
-import {
-  generateAIDreamRoadmap,
-  generateAIQuests,
-} from './services/aiService';
+import { splitRoadmapTasks } from './services/aiService';
 import { Header } from './components/Header';
 import { MobileNav } from './components/MobileNav';
 import { AuthView } from './components/AuthView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AwakeningView } from './components/AwakeningView';
-import { getRoadmapActions } from './engine/coaching';
+import { getActiveDreamStep, getCurrentDreamSteps, getRoadmapActions, planDailyFocus, type DailyTaskSuggestion } from './engine/coaching';
+import type { CalendarEvent } from './services/googleCalendar';
 import { CareerCoach, CoachSetupModal, GymCoach } from './components/CoachPanels';
 import { BodyConditionPanel, DailyCheckInModal, NutritionPanel } from './components/JournalPanels';
 import { getDailyEvidence, getGrowthActions, getJournalMoment, type CheckIn, type CheckInInput, type DayPhase } from './engine/journal';
@@ -122,7 +120,8 @@ export default function App() {
     loadLocalPlayer(loadSavedLanguage())
   );
   const [dailyLogs, setDailyLogs] = useState<DailyLogEntry[]>(() => loadLocalLogs());
-  const [moment, setMoment] = useState(getJournalMoment);
+  const [now, setNow] = useState(Date.now);
+  const [agenda, setAgenda] = useState<{ owner: string; events: CalendarEvent[] }>();
   const promptedCheckIns = useRef(new Set<string>());
   const promptedGym = useRef(new Set<string>());
   const [aiConfig, setAIConfig] = useState<AIConfig>(() => loadAIConfig());
@@ -148,9 +147,8 @@ export default function App() {
   const [isUnverifiedBootstrapAdmin, setIsUnverifiedBootstrapAdmin] = useState(false);
   const [sharedAIConfig, setSharedAIConfig] = useState<SharedAIPublicConfig | null>(null);
 
-  // AI Loading States
   const [isGeneratingRoadmap, setIsGeneratingRoadmap] = useState(false);
-  const [isGeneratingQuests, setIsGeneratingQuests] = useState(false);
+  const breakdownRequest = useRef(0);
 
   // Firebase Cloud Sync States
   const [cloudUser, setCloudUser] = useState<User | null>(null);
@@ -247,6 +245,7 @@ export default function App() {
   }, []);
 
   const commitPlayerChange = useCallback((next: PlayerProfile) => {
+    playerRef.current = next;
     setPlayer(next);
     saveLocalPlayer(next);
 
@@ -414,122 +413,59 @@ export default function App() {
     setInstallPrompt(null);
   };
 
-  const handleCompleteAwakening = async (input: CreateProfileInput) => {
+  const hasTaskBreakdown = Boolean(aiConfig.apiKey.trim() || (cloudUser && sharedAIConfig?.enabled !== false &&
+    (import.meta.env.VITE_AI_PROXY_URL || sharedAIConfig?.proxyConfigured)));
+
+  const runTaskBreakdown = async (profile: PlayerProfile, silent = false) => {
+    if (!hasTaskBreakdown || !navigator.onLine || !getActiveDreamStep(profile)) return;
+    const request = ++breakdownRequest.current;
+    const uid = cloudUserRef.current?.uid;
+    setIsGeneratingRoadmap(true);
+
+    try {
+      const breakdowns = await splitRoadmapTasks(profile.goal, profile.dreamSteps, lang, aiConfig);
+      const latest = playerRef.current;
+      if (breakdownRequest.current !== request || latest?.goal !== profile.goal || cloudUserRef.current?.uid !== uid) return;
+      const byId = new Map(breakdowns.map(({ id, actions }) => [id, actions]));
+      let changed = false;
+      const dreamSteps = latest.dreamSteps.map((step) => {
+        const actions = byId.get(step.id);
+        if (!actions || step.archived || step.completed || !profile.dreamSteps.some((original) => original.id === step.id && original.title === step.title)) return step;
+        const oldActions = getRoadmapActions(step, lang).map((action) => action.slice(0, 140));
+        const assigned = latest.quests.filter((quest) => quest.dreamStepId === step.id && oldActions.includes(quest.title)).map((quest) => quest.title);
+        const preserved = new Set([...(step.completedActions || []), ...assigned]);
+        const combined = [...new Set([...preserved, ...actions])].slice(0, 6);
+        if (combined.length === oldActions.length && combined.every((action, index) => action === oldActions[index])) return step;
+        changed = true;
+        return { ...step, actions: combined };
+      });
+      if (changed) commitPlayerChange({ ...latest, dreamSteps });
+      if (!silent) notify(
+        changed
+          ? (lang === 'id' ? 'Langkah kecil diperbarui.' : 'Small steps updated.')
+          : (lang === 'id' ? 'Langkah yang sudah ada tetap siap dikerjakan.' : 'Your existing steps are ready to use.'),
+        changed ? 'success' : 'info'
+      );
+    } catch {
+      if (!silent && breakdownRequest.current === request && playerRef.current?.goal === profile.goal && cloudUserRef.current?.uid === uid) {
+        notify(lang === 'id' ? 'Langkah dari aplikasi siap dipakai. Agnes sedang belum bisa merinci.' : 'Your local steps are ready. Agnes could not add detail right now.', 'info');
+      }
+    } finally {
+      if (breakdownRequest.current === request) setIsGeneratingRoadmap(false);
+    }
+  };
+
+  const handleCompleteAwakening = (input: CreateProfileInput) => {
     const created = createInitialPlayerProfile(input);
     commitPlayerChange(created);
     setMobileTab('status');
-
     notify(
       lang === 'id'
         ? `Selamat datang ${created.name}! Peta Impian menuju Level ${created.targetLevel} siap!`
         : `Welcome ${created.name}! Your Dream Roadmap to Level ${created.targetLevel} is ready!`,
       'success'
     );
-
-    if (aiConfig.apiKey.trim() || (cloudUser && (Boolean(import.meta.env.VITE_AI_PROXY_URL) || (sharedAIConfig?.enabled && sharedAIConfig?.proxyConfigured)))) {
-      void runGenerateRoadmap(created, true);
-    }
-  };
-
-  // =========================================================================
-  // AI ACTIONS (SHARED ADMIN PROXY -> PERSONAL BYOK -> SMART FALLBACK)
-  // =========================================================================
-  const runGenerateRoadmap = async (targetPlayer?: PlayerProfile, silent = false, changedGoal = false) => {
-    const active = targetPlayer ?? playerRef.current;
-    if (!active) return;
-
-    const requestUid = cloudUserRef.current?.uid;
-    setIsGeneratingRoadmap(true);
-    const res = await generateAIDreamRoadmap(active, lang, aiConfig, !changedGoal && active.dreamSteps.some((step) => step.completed || step.completedMinutes > 0));
-    setIsGeneratingRoadmap(false);
-
-    const latest = playerRef.current;
-    if (!latest || latest.goal !== active.goal || cloudUserRef.current?.uid !== requestUid) return;
-    const hasProgress = latest.dreamSteps.some((step) => step.completed || step.completedMinutes > 0);
-    const generated = res.dreamSteps.map((step) => changedGoal ? { ...step, id: 'goal-' + crypto.randomUUID(), completed: false, completedMinutes: 0 } : step);
-    const dreamSteps = changedGoal
-      ? [...latest.dreamSteps.filter((step) => step.completed || step.completedMinutes > 0), ...generated].slice(0, 50)
-      : hasProgress
-        ? latest.dreamSteps.map((step) => {
-          const suggestion = generated.find((candidate) => candidate.title === step.title);
-          return suggestion?.actions?.length && !step.completed
-            ? { ...step, actions: [...new Set([...(step.completedActions || []), ...suggestion.actions])].slice(0, 6) } : step;
-        })
-        : generated.map((step, index) => ({ ...step, id: latest.dreamSteps[index]?.id || step.id }));
-    const firstStep = (changedGoal ? generated : dreamSteps).find((step) => !step.completed);
-    const firstAction = firstStep && getRoadmapActions(firstStep, lang)[0]?.slice(0, 140);
-    const nextTasks = (silent || changedGoal) && firstStep && firstAction && !latest.quests.some((quest) => quest.title === firstAction)
-      ? [{
-          id: crypto.randomUUID(), title: firstAction, category: 'CAREER' as const, unitType: 'MINUTES' as const,
-          defaultQty: 15, skillTag: firstStep.skillName, dreamStepId: firstStep.id, exp: 30, gold: 20, completed: false,
-        }, ...latest.quests].slice(0, 100)
-      : latest.quests;
-    commitPlayerChange({ ...latest, dreamSteps, coachAdvice: res.coachAdvice, quests: nextTasks });
-
-    if (!silent) {
-      playSFX('quest');
-      if (res.usedFallback) {
-        notify(
-          res.errorMessage
-            ? lang === 'id'
-              ? `AI info (${res.errorMessage.slice(0, 75)}). Memakai rencana cerdas lokal.`
-              : `AI note (${res.errorMessage.slice(0, 75)}). Used smart local planner.`
-            : lang === 'id'
-              ? 'Rencana cerdas disusun! Masuk akun atau isi Agnes AI API Key di Pengaturan untuk AI Coach penuh.'
-              : 'Smart roadmap generated! Sign in or add Agnes AI API Key in Settings for full AI coaching.',
-          'info'
-        );
-      } else {
-        const quotaTxt =
-          res.viaSharedProxy && typeof res.remainingToday === 'number'
-            ? ` (${lang === 'id' ? 'sisa kuota' : 'left'}: ${res.remainingToday})`
-            : '';
-        notify(
-          lang === 'id'
-            ? `AI Coach (Agnes AI) berhasil memperbarui Peta Impianmu!${quotaTxt}`
-            : `AI Coach (Agnes AI) updated your Dream Roadmap!${quotaTxt}`,
-          'success'
-        );
-      }
-    }
-  };
-
-  const runGenerateAIQuests = async () => {
-    if (!player) return;
-    setIsGeneratingQuests(true);
-    const res = await generateAIQuests(player, lang, aiConfig);
-    setIsGeneratingQuests(false);
-
-    const current = playerRef.current;
-    if (!current || current.goal !== player.goal) return;
-    const generated = res.quests.filter((quest) => quest.category !== 'FITNESS' &&
-      !current.quests.some((existing) => existing.title === quest.title));
-    commitPlayerChange({ ...current, quests: [...current.quests, ...generated].slice(0, 100) });
-
-    playSFX('quest');
-    if (res.usedFallback) {
-      notify(
-        res.errorMessage
-          ? lang === 'id'
-            ? `AI info (${res.errorMessage.slice(0, 75)}). Tugas harian dibuat secara lokal.`
-            : `AI note (${res.errorMessage.slice(0, 75)}). Generated synced local tasks.`
-          : lang === 'id'
-            ? 'Tugas harian tersinkronisasi dengan tahap aktifmu!'
-            : 'Synced tasks generated for your active milestone!',
-        'info'
-      );
-    } else {
-      const quotaTxt =
-        res.viaSharedProxy && typeof res.remainingToday === 'number'
-          ? ` (${lang === 'id' ? 'sisa kuota' : 'left'}: ${res.remainingToday})`
-          : '';
-      notify(
-        lang === 'id'
-          ? `Agnes AI membuat Tugas Harian baru sesuai peta impianmu!${quotaTxt}`
-          : `Agnes AI generated fresh daily tasks matched to your roadmap!${quotaTxt}`,
-        'success'
-      );
-    }
+    void runTaskBreakdown(created, true);
   };
 
   // =========================================================================
@@ -643,7 +579,7 @@ export default function App() {
     if (!player) return;
     let newlyCompleted = false;
     const nextSteps = player.dreamSteps.map((step) => {
-      if (step.id !== stepId) return step;
+      if (step.id !== stepId || step.archived) return step;
       const nextDone = !step.completed;
       if (nextDone) newlyCompleted = true;
       return {
@@ -655,11 +591,12 @@ export default function App() {
       };
     });
 
-    const completedCount = nextSteps.filter((s) => s.completed).length;
+    const currentSteps = getCurrentDreamSteps({ ...player, dreamSteps: nextSteps });
+    const completedCount = currentSteps.filter((s) => s.completed).length;
     const hp = Math.max(
       0,
       Math.round(
-        ((Math.max(1, nextSteps.length) - completedCount) / Math.max(1, nextSteps.length)) *
+        ((Math.max(1, currentSteps.length) - completedCount) / Math.max(1, currentSteps.length)) *
           player.boss.maxHp
       )
     );
@@ -721,16 +658,14 @@ export default function App() {
       void saveDailyLogToCloud(cloudUser.uid, logEntry).catch(() => {});
     }
 
-    const activeStep =
-      player.dreamSteps.find((s) => !s.completed) || player.dreamSteps[0];
-    const refreshedQuests =
-      player.quests.length > 0
-        ? player.quests.filter((quest) => !player.dreamSteps.some((step) =>
-            step.id === quest.dreamStepId && step.completedActions?.includes(quest.title))).map((q) => {
-            const { completedQty: _cq, completedRpe: _cr, ...cleanQuest } = q;
-            return { ...cleanQuest, completed: false };
-          })
-        : createSyncedQuestsForActiveStep(activeStep, player.dailyBreakdown, lang);
+    const refreshedQuests = player.quests.filter((quest) => {
+      if (quest.id.startsWith('daily-plan-') || quest.id.startsWith('ai_q_')) return !quest.completed;
+      return !player.dreamSteps.some((step) =>
+        step.id === quest.dreamStepId && (step.completedActions?.includes(quest.title) || (step.archived && quest.completed)));
+    }).map((quest) => {
+      const { completedQty: _cq, completedRpe: _cr, ...cleanQuest } = quest;
+      return { ...cleanQuest, completed: false };
+    });
 
     const base: PlayerProfile = {
       ...player,
@@ -783,14 +718,15 @@ export default function App() {
     if (!player) return;
     const title = item.actionTask.slice(0, 140);
     if (player.quests.some((quest) => !quest.completed && quest.title === title)) return;
-    const activeStep = player.dreamSteps.find((s) => !s.completed);
+    const active = getActiveDreamStep(player);
+    const activeStep = active && item.id === 'roadmap-' + active.id ? active : undefined;
     const nextQuest: Quest = {
       id: `opp_q_${Date.now()}`,
       title,
       category: 'STUDY',
       unitType: 'MINUTES',
       defaultQty: 20,
-      skillTag: item.tag,
+      skillTag: activeStep?.skillName || item.tag,
       dreamStepId: activeStep?.id ?? null,
       exp: 45,
       gold: 40,
@@ -921,10 +857,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    const refresh = () => setMoment((previous) => {
-      const current = getJournalMoment();
-      return previous.dateKey === current.dateKey && previous.phase === current.phase ? previous : current;
-    });
+    const refresh = () => setNow(Date.now());
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
     const interval = window.setInterval(refresh, 30_000);
@@ -935,7 +868,7 @@ export default function App() {
     };
   }, []);
 
-  const { dateKey, phase } = moment;
+  const { dateKey, phase } = getJournalMoment(new Date(now));
   const currentCheckInId = dateKey + '-' + phase;
   const hasCheckIn = journal.records.some((entry) => entry.id === currentCheckInId);
   const isPlayerReady = Boolean(player) && authResolved && !isAdminView && !showAuthScreen && journal.ready;
@@ -960,6 +893,8 @@ export default function App() {
   }, [isPlayerReady, hasCheckIn, modal, journal.key, currentCheckInId, dateKey, phase, missingGym]);
 
   const evidence = getDailyEvidence(journal.records, dailyLogs, dateKey, player?.age ?? 18);
+  const focus = player ? planDailyFocus(player, evidence, agenda?.owner === journal.key ? agenda.events : [], phase, now, lang) : null;
+  const updateAgenda = useCallback((owner: string, events: CalendarEvent[]) => setAgenda({ owner, events }), []);
   const addCoachQuest = (quest: Quest) => {
     const current = playerRef.current;
     if (!current || current.quests.length >= 100 || current.quests.some((item) => item.title === quest.title && item.category === quest.category && item.dreamStepId === quest.dreamStepId)) return;
@@ -972,10 +907,15 @@ export default function App() {
     addCoachQuest({
       id: crypto.randomUUID(), title: clean, category: 'CAREER', unitType: 'MINUTES',
       defaultQty: 15, skillTag: step?.skillName || (lang === 'id' ? 'Manajemen proyek' : 'Project management'),
-      ...(step ? { dreamStepId: step.id } : {}),
+      dreamStepId: step?.id ?? null,
       exp: 30, gold: 20, completed: false,
     });
   };
+
+  const addSuggestedTask = (task: DailyTaskSuggestion) => addCoachQuest({
+    id: 'daily-plan-' + crypto.randomUUID(), title: task.title, category: task.category, unitType: 'MINUTES',
+    defaultQty: task.minutes, skillTag: task.skill, dreamStepId: task.stepId ?? null, exp: 30, gold: 20, completed: false,
+  });
 
   const openCheckIn = () => setModal({ type: 'checkIn', ...getJournalMoment(), owner: journal.key });
   const saveCheckIn = (input: CheckInInput) => {
@@ -1070,7 +1010,7 @@ export default function App() {
             lang={lang}
             isCloudLoggedIn={Boolean(cloudUser)}
             onOpenCloudLogin={() => setShowAuthScreen(true)}
-            onCompleteAwakening={(input) => void handleCompleteAwakening(input)}
+            onCompleteAwakening={handleCompleteAwakening}
           />
         ) : (
           <section className="space-y-5">
@@ -1106,7 +1046,9 @@ export default function App() {
                   player={player}
                   lang={lang}
                   isGeneratingRoadmap={isGeneratingRoadmap}
-                  onGenerateRoadmap={() => void runGenerateRoadmap()}
+                  focusNote={focus?.note ?? ''}
+                  canBreakDown={hasTaskBreakdown && Boolean(getActiveDreamStep(player))}
+                  onGenerateRoadmap={() => void runTaskBreakdown(player)}
                   onEditDream={() => setModal({ type: 'editDream' })}
                   onAddStep={() => setModal({ type: 'addStep' })}
                   onAddRoadmapTask={(step, action) => addMicroTask(action, step)}
@@ -1130,12 +1072,12 @@ export default function App() {
                   player={player}
                   lang={lang}
                   filter={questFilter}
-                  isGeneratingQuests={isGeneratingQuests}
+                  focus={focus}
+                  onAddSuggestion={addSuggestedTask}
                   onChangeFilter={(f) => {
                     playSFX('click');
                     setQuestFilter(f);
                   }}
-                  onGenerateAIQuests={() => void runGenerateAIQuests()}
                   onRequestCompleteQuest={(q) => setModal({ type: 'completeQuest', quest: q })}
                   onDeleteQuest={(questId) => {
                     playSFX('click');
@@ -1164,7 +1106,7 @@ export default function App() {
 
             <div className={`grid gap-4 lg:grid-cols-2 ${mobileTab !== 'tasks' ? 'hidden lg:grid' : ''}`}>
               <CareerCoach key={journal.key} owner={journal.key} player={player} lang={lang} records={journal.records}
-                onEdit={() => setModal({ type: 'coachSetup', section: 'career' })} onAdd={addMicroTask} />
+                onEdit={() => setModal({ type: 'coachSetup', section: 'career' })} onAdd={addMicroTask} onAgenda={updateAgenda} />
               <GymCoach player={player} lang={lang} evidence={evidence} records={journal.records}
                 onEdit={() => setModal({ type: 'coachSetup', section: 'gym' })} onAdd={addCoachQuest} />
             </div>
@@ -1274,11 +1216,26 @@ export default function App() {
           lang={lang}
           onSave={(goal, targetLevel, dailyBudget) => {
             const dailyBreakdown = computeDailyDurationBreakdown(dailyBudget, player.bio);
-            const next = { ...player, goal, targetLevel, dailyBreakdown, boss: { ...player.boss, name: goal, desc: goal } };
             const changed = goal !== player.goal;
+            const dreamSteps = changed ? [
+              ...createDefaultDreamSteps(goal, player.profession, targetLevel, dailyBreakdown, lang)
+                .map((step) => ({ ...step, id: 'goal-' + crypto.randomUUID() })),
+              ...player.dreamSteps.filter((step) => step.completed || step.completedMinutes || step.completedActions?.length)
+                .slice(0, 45).map((step) => ({ ...step, archived: true })),
+            ] : player.dreamSteps;
+            const previousSteps = new Set(getCurrentDreamSteps(player).map((step) => step.id));
+            const quests = changed ? player.quests.filter((quest) => quest.completed || !quest.dreamStepId ||
+              !previousSteps.has(quest.dreamStepId) || !/^(daily-plan-|ai_q_|ds_study_|ds_work_)/.test(quest.id)) : player.quests;
+            const next = { ...player, goal, targetLevel, dailyBreakdown, dreamSteps, quests, boss: {
+              ...player.boss, name: goal, desc: goal, hp: changed ? player.boss.maxHp : player.boss.hp,
+            } };
+            if (changed) {
+              breakdownRequest.current++;
+              setIsGeneratingRoadmap(false);
+            }
             commitPlayerChange(next);
             setModal(null);
-            if (cloudUser || aiConfig.apiKey.trim() || changed) void runGenerateRoadmap(next, false, changed);
+            if (changed) void runTaskBreakdown(next, true);
           }}
           onClose={() => setModal(null)}
         />

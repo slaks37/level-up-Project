@@ -348,6 +348,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     : 'Awaiting Admin'}
               </span>
             </div>
+            <p className="text-xs text-emerald-900">{lang === 'id'
+              ? 'Agnes merinci langkah kecil di Peta Impian. Saran harian memakai catatan yang kamu simpan di Level Up.'
+              : 'Agnes breaks down roadmap milestones. Daily suggestions use the records you save in Level Up.'}</p>
             <label className="flex items-center gap-2 text-[11px] text-emerald-800 cursor-pointer">
               <input
                 type="checkbox"

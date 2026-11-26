@@ -1,3 +1,4 @@
+import { getActiveDreamStep, getCurrentDreamSteps, getNextRoadmapAction } from './coaching';
 import type { DailyLogEntry, GrowthNewsItem, Language, PlayerProfile, QuestCategory, WorkoutFeedback } from '../types';
 
 export type DayPhase = 'morning' | 'day' | 'evening';
@@ -67,7 +68,8 @@ export function getDailyEvidence(entries: JournalEntry[], logs: DailyLogEntry[],
   const extra = checks.filter((entry) => entry.phase !== 'morning').reduce((sum, entry) => sum + entry.extraMinutes, 0);
   const manual = checks.filter((entry) => entry.phase !== 'morning').flatMap((entry) =>
     entry.note.split('\n').map((line) => line.trim()).filter(Boolean));
-  const completed = [...new Set([...tasks.map((task) => task.title), ...manual])];
+  const finished = tasks.filter((task) => !(task.workout?.pain && task.minutes === 0));
+  const completed = [...new Set([...finished.map((task) => task.title), ...manual])];
   const pastSleep = new Map<string, number>();
   for (const entry of entries) {
     if (entry.kind === 'checkin' && entry.dateKey < dateKey && entry.sleepHours !== null && !pastSleep.has(entry.dateKey)) {
@@ -85,7 +87,7 @@ export function getDailyEvidence(entries: JournalEntry[], logs: DailyLogEntry[],
   const status = needsBreak ? 'rest' : shortSleep || shortPattern || busyDay || meal === 'skipped' ? 'watch' :
     energy === 'fresh' || energy === 'steady' || (sleep !== null && meal === 'varied') ? 'steady' : 'unknown';
   return { sleep, meal, mealNote, mealGroups, mealEnjoyment, energy, work, study, fitness, extra, minutesTotal, completed, recentSleep, shortSleep, shortPattern, busyDay, status,
-    completedCount: Math.max(tasks.length, closed?.completedTasks ?? 0),
+    completedCount: Math.max(finished.length, closed?.completedTasks ?? 0),
     plan: checks.find((entry) => entry.phase === 'morning')?.note ?? '' } as const;
 }
 
@@ -111,8 +113,9 @@ export function journalEncouragement(evidence: DailyEvidence, phase: DayPhase, l
 
 export function getGrowthActions(player: PlayerProfile, logs: DailyLogEntry[], entries: JournalEntry[], evidence: DailyEvidence, lang: Language): GrowthNewsItem[] {
   const id = lang === 'id';
-  const milestones = player.dreamSteps.filter((step) => step.completed);
-  const active = player.dreamSteps.find((step) => !step.completed);
+  const currentSteps = getCurrentDreamSteps(player);
+  const milestones = currentSteps.filter((step) => step.completed);
+  const active = getActiveDreamStep(player);
   const skills = [...player.shadows].sort((a, b) => b.totalMinutes - a.totalMinutes);
   const forming = Object.values(player.skillProgress).filter((skill) => !skill.unlocked)
     .sort((a, b) => b.totalMinutes - a.totalMinutes || b.sessions - a.sessions);
@@ -121,14 +124,14 @@ export function getGrowthActions(player: PlayerProfile, logs: DailyLogEntry[], e
     ...entries.filter((entry) => entry.kind === 'activity' || (entry.phase !== 'morning' && entry.note.trim())).map((entry) => entry.dateKey),
   ]);
   const dayCount = activeDates.size;
-  const latestActivity = entries.find((entry): entry is LoggedActivity => entry.kind === 'activity');
+  const latestActivity = entries.find((entry): entry is LoggedActivity => entry.kind === 'activity' && !(entry.workout?.pain && entry.minutes === 0));
   const recentPlan = evidence.plan.split('\n')[0].slice(0, 90).trim();
   const results: GrowthNewsItem[] = [];
   if (active) results.push({
     id: 'roadmap-' + active.id, tag: id ? 'Peta impian' : 'Roadmap', title: active.title,
-    summary: id ? `${milestones.length}/${player.dreamSteps.length} tahap selesai. Tahap ini melatih ${active.skillName || player.profession}: ${active.completedMinutes}/${active.targetMinutes} menit.` :
-      `${milestones.length}/${player.dreamSteps.length} milestones complete. This step builds ${active.skillName || player.profession}: ${active.completedMinutes}/${active.targetMinutes} min.`,
-    actionTask: id ? `Kerjakan satu hasil kecil untuk ${active.title}` : `Create one small deliverable for ${active.title}`,
+    summary: id ? `${milestones.length}/${currentSteps.length} tahap selesai. Tahap ini melatih ${active.skillName || player.profession}: ${active.completedMinutes}/${active.targetMinutes} menit.` :
+      `${milestones.length}/${currentSteps.length} milestones complete. This step builds ${active.skillName || player.profession}: ${active.completedMinutes}/${active.targetMinutes} min.`,
+    actionTask: getNextRoadmapAction(active, lang) || (id ? `Tinjau hasil tahap ${active.title}` : `Review the outcome of ${active.title}`),
   });
   if (forming[0]) {
     const skill = forming[0];

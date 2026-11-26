@@ -1,7 +1,6 @@
 import React from 'react';
 import {
   Award,
-  Bot,
   Check,
   CheckSquare,
   Clock,
@@ -26,7 +25,7 @@ import type {
 } from '../types';
 import { tr } from '../data/i18n';
 import { getActiveStage } from '../engine/science';
-import { getRoadmapActions } from '../engine/coaching';
+import { getCurrentDreamSteps, getRoadmapActions, type DailyTaskSuggestion } from '../engine/coaching';
 import { PromoNewsPanel } from './PromoNewsPanel';
 
 // =========================================================================
@@ -175,6 +174,8 @@ export const DreamRoadmapPanel: React.FC<{
   player: PlayerProfile;
   lang: Language;
   isGeneratingRoadmap: boolean;
+  canBreakDown: boolean;
+  focusNote: string;
   onGenerateRoadmap: () => void;
   onEditDream: () => void;
   onAddStep: () => void;
@@ -185,6 +186,8 @@ export const DreamRoadmapPanel: React.FC<{
   player,
   lang,
   isGeneratingRoadmap,
+  canBreakDown,
+  focusNote,
   onGenerateRoadmap,
   onEditDream,
   onAddStep,
@@ -192,8 +195,10 @@ export const DreamRoadmapPanel: React.FC<{
   onToggleStep,
   onDeleteStep,
 }) => {
-  const totalSteps = Math.max(1, player.dreamSteps.length);
-  const completedSteps = player.dreamSteps.filter((s) => s.completed).length;
+  const currentSteps = getCurrentDreamSteps(player);
+  const archivedSteps = player.dreamSteps.filter((step) => step.archived);
+  const totalSteps = Math.max(1, currentSteps.length);
+  const completedSteps = currentSteps.filter((s) => s.completed).length;
   const pct = Math.round((completedSteps / totalSteps) * 100);
 
   const proximityText =
@@ -213,7 +218,7 @@ export const DreamRoadmapPanel: React.FC<{
           <span className="truncate">{tr(lang, 'dreamPanelTitle')}</span>
         </span>
         <div className="flex items-center gap-1 flex-shrink-0">
-          <button
+          {canBreakDown && <button
             type="button"
             disabled={isGeneratingRoadmap}
             onClick={onGenerateRoadmap}
@@ -225,7 +230,7 @@ export const DreamRoadmapPanel: React.FC<{
               <Sparkles className="w-3 h-3 text-orange-400" />
             )}
             <span>{tr(lang, 'btnAiRoadmapLbl')}</span>
-          </button>
+          </button>}
           <button
             type="button"
             onClick={onEditDream}
@@ -260,15 +265,15 @@ export const DreamRoadmapPanel: React.FC<{
             </div>
 
             <div className="mt-2 p-2 rounded bg-white/90 border border-orange-200 text-[11px] text-slate-700 flex items-start gap-1.5">
-              <Bot className="w-3.5 h-3.5 text-sky-600 flex-shrink-0 mt-0.5" />
-              <span>{player.coachAdvice}</span>
+              <Compass className="w-3.5 h-3.5 text-sky-600 flex-shrink-0 mt-0.5" />
+              <span className="min-w-0 break-words">{focusNote}</span>
             </div>
 
             <div className="mt-2.5">
               <div className="flex justify-between text-[11px] font-semibold mb-1 gap-2">
                 <span className="text-slate-700 truncate">{proximityText}</span>
                 <span className="font-mono text-orange-700 font-bold flex-shrink-0">
-                  {completedSteps} / {player.dreamSteps.length}{' '}
+                  {completedSteps} / {currentSteps.length}{' '}
                   {lang === 'id' ? 'Tahap' : 'Steps'}
                 </span>
               </div>
@@ -282,7 +287,7 @@ export const DreamRoadmapPanel: React.FC<{
           </div>
 
           <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-            {player.dreamSteps.map((step) => {
+            {currentSteps.map((step) => {
               const stepPct = step.completed
                 ? 100
                 : Math.min(
@@ -331,7 +336,7 @@ export const DreamRoadmapPanel: React.FC<{
                           <span className="font-mono text-[9px] font-bold text-slate-600">
                             {step.completedMinutes}/{step.targetMinutes}m
                           </span>
-                          {player.dreamSteps.length > 1 && (
+                          {currentSteps.length > 1 && (
                             <button
                               type="button"
                               onClick={() => onDeleteStep(step.id)}
@@ -392,6 +397,14 @@ export const DreamRoadmapPanel: React.FC<{
           </div>
         </div>
 
+        {archivedSteps.length > 0 && <details className="mt-3 rounded border border-slate-200 p-2 text-xs">
+          <summary className="cursor-pointer font-semibold">{lang === 'id' ? 'Progres dari goal sebelumnya' : 'Progress from previous goals'}</summary>
+          <ul className="mt-2 space-y-1 break-words">
+            {archivedSteps.map((step) => <li key={step.id}>{step.title} · {step.completed
+              ? (lang === 'id' ? 'Selesai' : 'Done')
+              : (lang === 'id' ? `${step.completedMinutes} menit tercatat` : `${step.completedMinutes} min logged`)}</li>)}
+          </ul>
+        </details>}
         <div className="mt-3 pt-2.5 border-t border-slate-200">
           <button
             type="button"
@@ -414,9 +427,9 @@ export const DailyTasksPanel: React.FC<{
   player: PlayerProfile;
   lang: Language;
   filter: QuestFilter;
-  isGeneratingQuests: boolean;
+  focus: { note: string; pendingNote: string; suggestions: DailyTaskSuggestion[] } | null;
+  onAddSuggestion: (task: DailyTaskSuggestion) => void;
   onChangeFilter: (f: QuestFilter) => void;
-  onGenerateAIQuests: () => void;
   onRequestCompleteQuest: (quest: Quest) => void;
   onDeleteQuest: (questId: string) => void;
   onOpenAddQuest: () => void;
@@ -425,9 +438,9 @@ export const DailyTasksPanel: React.FC<{
   player,
   lang,
   filter,
-  isGeneratingQuests,
+  focus,
+  onAddSuggestion,
   onChangeFilter,
-  onGenerateAIQuests,
   onRequestCompleteQuest,
   onDeleteQuest,
   onOpenAddQuest,
@@ -465,24 +478,27 @@ export const DailyTasksPanel: React.FC<{
           <CheckSquare className="w-3.5 h-3.5 flex-shrink-0" />
           <span className="truncate">{tr(lang, 'questBoardTitle')}</span>
         </span>
-        <button
-          type="button"
-          disabled={isGeneratingQuests}
-          onClick={onGenerateAIQuests}
-          className="font-mono text-[9px] font-bold px-2 py-1 rounded bg-slate-900 hover:bg-sky-700 disabled:opacity-60 text-white transition flex items-center gap-1 flex-shrink-0 btn-anime"
-        >
-          {isGeneratingQuests ? (
-            <Loader2 className="w-3 h-3 animate-spin text-orange-400" />
-          ) : (
-            <Sparkles className="w-3 h-3 text-orange-400" />
-          )}
-          <span>{tr(lang, 'aiQuestBtnText')}</span>
-        </button>
+
       </div>
 
       <div className="p-4 flex-grow flex flex-col justify-between">
         <div>
           <p className="text-xs text-slate-600 mb-3">{tr(lang, 'questBoardHint')}</p>
+
+          {focus && <section className="mb-3 space-y-2 rounded border border-sky-200 bg-sky-50 p-2.5 text-xs">
+            <h3 className="font-bold text-sky-950">{lang === 'id' ? 'Fokus hari ini' : 'Today’s focus'}</h3>
+            <p className="break-words text-slate-700">{focus.note}</p>
+            {focus.pendingNote && <p className="break-words font-medium text-sky-900">{focus.pendingNote}</p>}
+            {focus.suggestions.map((task) => <div key={task.title} className="flex items-start justify-between gap-2 rounded border border-sky-100 bg-white p-2">
+              <div className="min-w-0 break-words">
+                <p className="font-semibold">{task.title}</p>
+                <p className="mt-0.5 text-slate-600">{task.minutes} {lang === 'id' ? 'menit' : 'min'} · {task.reason}</p>
+              </div>
+              <button type="button" onClick={() => onAddSuggestion(task)} className="shrink-0 rounded border border-sky-300 px-2 py-1 font-bold text-sky-900 hover:bg-sky-100">
+                {lang === 'id' ? 'Tambah' : 'Add'}
+              </button>
+            </div>)}
+          </section>}
 
           {/* Synced Daily Duration Breakdown */}
           <div className="mb-3 p-2.5 rounded bg-slate-50 border border-slate-300 space-y-2">
@@ -567,8 +583,8 @@ export const DailyTasksPanel: React.FC<{
             {filteredQuests.length === 0 ? (
               <div className="text-center py-6 text-xs text-slate-400 italic">
                 {lang === 'id'
-                  ? 'Belum ada tugas di kategori ini. Tambahkan tugas atau klik BUAT TUGAS AI.'
-                  : 'No tasks in this category yet. Add one or click AI SYNCED TASKS.'}
+                  ? 'Belum ada tugas di kategori ini. Pilih saran di atas atau tambahkan tugas sendiri.'
+                  : 'No tasks in this category yet. Add a suggestion above or make your own task.'}
               </div>
             ) : (
               filteredQuests.map((q) => (

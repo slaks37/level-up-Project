@@ -23,6 +23,8 @@ GitHub Actions menjalankan pengambilan berita setiap hari sekitar 07.23 WIB dan 
 
 Profil kerja memuat industri, tanggung jawab, dan proyek aktif. Panel Tugas memadukan cek sprint atau progres, tindak lanjut rapat, impor agenda Kalender Google, dan rencana latihan yang menyesuaikan tidur, makan, dan catatan capek atau nyeri. Langkah kecil Peta Impian dapat dijadikan tugas dan tersimpan saat selesai.
 
+Aturan aplikasi menyusun Peta Impian, memilih fokus hari ini dari jurnal, agenda, proyek aktif, waktu tersisa dan kemajuan skill, serta menyesuaikan latihan dan rekomendasi pengembangan diri. Agnes menerima tujuan dan judul tahap untuk mengusulkan langkah kecil. Keputusan tentang jadwal, bobot progres, dan aktivitas harian tetap dihitung oleh aplikasi.
+
 Admin menambahkan alamat terverifikasi melalui panel Email dengan Akses Admin. Pemain baru membuat akun melalui situs publik. Proxy Agnes produksi di folder `proxy/` menggunakan identitas Firebase dengan akses terbatas ke konfigurasi Agnes dan kuota. Atur `VITE_AI_PROXY_URL` ke alias produksi proxy pada build Hosting.
 
 Izin Google Calendar langsung menggunakan `calendar.events.owned.readonly`. Kedua domain harus menjadi JavaScript origin pada OAuth Web Client. Aktifkan `VITE_CALENDAR_OAUTH_ENABLED` setelah scope ini mendapatkan verifikasi Google. Impor .ics tersedia saat peninjauan berlangsung.

@@ -1,3 +1,4 @@
+import { getActiveDreamStep } from './coaching';
 import type {
   Biometrics,
   DailyBreakdown,
@@ -201,14 +202,11 @@ export function applyQuestCompletion(
 
   // Sync progress into linked Dream Step (or first active step if study/career)
   let autoCompletedStepTitle: string | null = null;
-  const targetStepId =
-    quest.dreamStepId ||
-    (quest.category !== 'FITNESS'
-      ? player.dreamSteps.find((s) => !s.completed)?.id ?? null
-      : null);
+  const targetStepId = quest.dreamStepId === undefined && quest.category !== 'FITNESS'
+    ? getActiveDreamStep(player)?.id : quest.dreamStepId;
 
   const nextDreamSteps = player.dreamSteps.map((step) => {
-    if (step.id !== targetStepId || step.completed) return step;
+    if (step.id !== targetStepId || step.completed || step.archived) return step;
     const nextMins = step.completedMinutes + result.loggedMinutes;
     const reached = nextMins >= step.targetMinutes;
     if (reached) autoCompletedStepTitle = step.title;
@@ -272,12 +270,13 @@ export function applyQuestCompletion(
     }
   }
 
-  const completedStepsCount = nextDreamSteps.filter((s) => s.completed).length;
+  const currentSteps = nextDreamSteps.filter((step) => !step.archived);
+  const completedStepsCount = currentSteps.filter((s) => s.completed).length;
   const hpRemaining = Math.max(
     0,
     Math.round(
-      ((Math.max(1, nextDreamSteps.length) - completedStepsCount) /
-        Math.max(1, nextDreamSteps.length)) *
+      ((Math.max(1, currentSteps.length) - completedStepsCount) /
+        Math.max(1, currentSteps.length)) *
         (player.boss.maxHp || 1000)
     )
   );
@@ -512,120 +511,6 @@ export function createDefaultDreamSteps(
   ];
 }
 
-export function createSyncedQuestsForActiveStep(
-  step: DreamStep,
-  breakdown: DailyBreakdown,
-  lang: Language
-): Quest[] {
-  const now = Date.now();
-  const fitHalf = Math.max(15, Math.round(breakdown.fitness / 2));
-  const cardioMin = Math.max(15, breakdown.fitness - fitHalf);
-
-  if (lang === 'en') {
-    return [
-      {
-        id: `ds_study_${now}`,
-        title: `[Study] ${step.title}`,
-        category: 'STUDY',
-        unitType: 'MINUTES',
-        defaultQty: breakdown.study,
-        skillTag: step.skillName,
-        dreamStepId: step.id,
-        exp: 42,
-        gold: 35,
-        completed: false,
-      },
-      {
-        id: `ds_work_${now + 1}`,
-        title: `[Deep Work] Apply: ${step.title}`,
-        category: 'CAREER',
-        unitType: 'MINUTES',
-        defaultQty: breakdown.work,
-        skillTag: step.skillName,
-        dreamStepId: step.id,
-        exp: 52,
-        gold: 45,
-        completed: false,
-      },
-      {
-        id: `f_str_${now + 2}`,
-        title: 'Strength Training (Push-Ups / Squats / Resistance)',
-        category: 'FITNESS',
-        unitType: 'REPS',
-        defaultQty: 40,
-        estMinutes: fitHalf,
-        skillTag: 'Muscular Strength & Posture',
-        exp: 45,
-        gold: 40,
-        completed: false,
-      },
-      {
-        id: `f_cardio_${now + 3}`,
-        title: 'Zone 2 Cardio / Brisk Walk & Endurance Run',
-        category: 'FITNESS',
-        unitType: 'MINUTES',
-        defaultQty: cardioMin,
-        estMinutes: cardioMin,
-        skillTag: 'VO2 Cardio Stamina',
-        exp: 40,
-        gold: 35,
-        completed: false,
-      },
-    ];
-  }
-
-  return [
-    {
-      id: `ds_study_${now}`,
-      title: `[Belajar] ${step.title}`,
-      category: 'STUDY',
-      unitType: 'MINUTES',
-      defaultQty: breakdown.study,
-      skillTag: step.skillName,
-      dreamStepId: step.id,
-      exp: 42,
-      gold: 35,
-      completed: false,
-    },
-    {
-      id: `ds_work_${now + 1}`,
-      title: `[Kerja Fokus] Praktik Langsung: ${step.title}`,
-      category: 'CAREER',
-      unitType: 'MINUTES',
-      defaultQty: breakdown.work,
-      skillTag: step.skillName,
-      dreamStepId: step.id,
-      exp: 52,
-      gold: 45,
-      completed: false,
-    },
-    {
-      id: `f_str_${now + 2}`,
-      title: 'Latihan Kekuatan Otot (Push-Up / Squat Terukur)',
-      category: 'FITNESS',
-      unitType: 'REPS',
-      defaultQty: 40,
-      estMinutes: fitHalf,
-      skillTag: 'Kekuatan Otot & Postur',
-      exp: 45,
-      gold: 40,
-      completed: false,
-    },
-    {
-      id: `f_cardio_${now + 3}`,
-      title: 'Kardio Zone 2 / Jalan Cepat & Lari Stamina',
-      category: 'FITNESS',
-      unitType: 'MINUTES',
-      defaultQty: cardioMin,
-      estMinutes: cardioMin,
-      skillTag: 'Stamina Kardio VO2',
-      exp: 40,
-      gold: 35,
-      completed: false,
-    },
-  ];
-}
-
 export interface CreateProfileInput {
   name: string;
   gender: Gender;
@@ -670,7 +555,6 @@ export function createInitialPlayerProfile(input: CreateProfileInput): PlayerPro
     dailyBreakdown,
     input.lang
   );
-  const quests = createSyncedQuestsForActiveStep(dreamSteps[0], dailyBreakdown, input.lang);
 
   return {
     schemaVersion: PLAYER_SCHEMA_VERSION,
@@ -704,7 +588,7 @@ export function createInitialPlayerProfile(input: CreateProfileInput): PlayerPro
     nutritionCondition: 'balanced',
     stats: { str: 10, vit: 10, int: 10, agi: 10, cha: 10 },
     stages,
-    quests,
+    quests: [],
     shadows: defaultShadows,
     skillProgress: {},
     dreamSteps,
@@ -784,7 +668,7 @@ export function normalizePlayerProfile(raw: Partial<PlayerProfile>, lang: Langua
           { rank: 'A-Rank', title: 'Ahli', minLvl: 12 },
           { rank: 'S-Rank', title: 'Master', minLvl: 20 },
         ],
-    quests: Array.isArray(raw.quests) ? raw.quests : createSyncedQuestsForActiveStep(dreamSteps[0], dailyBreakdown, lang),
+    quests: Array.isArray(raw.quests) ? raw.quests : [],
     shadows: Array.isArray(raw.shadows) ? raw.shadows : [],
     skillProgress: raw.skillProgress && typeof raw.skillProgress === 'object' ? raw.skillProgress : {},
     dreamSteps,

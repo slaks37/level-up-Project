@@ -1,3 +1,4 @@
+import { getActiveDreamStep } from '../engine/coaching';
 import React, { useId, useMemo, useState } from 'react';
 import {
   Activity,
@@ -551,7 +552,7 @@ export const AddQuestModal: React.FC<{
         onSubmit={(e) => {
           e.preventDefault();
           if (!title.trim()) return;
-          const activeStep = player.dreamSteps.find((s) => !s.completed);
+          const activeStep = getActiveDreamStep(player);
           onAdd({
             id: `custom_q_${Date.now()}`,
             title: title.trim(),

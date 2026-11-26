@@ -1,5 +1,9 @@
 import type { CareerProfile, DreamStep, GymProfile, Language, PlayerProfile, Quest } from '../types';
-import type { DailyEvidence, JournalEntry, LoggedActivity } from './journal';
+import type { DayPhase, DailyEvidence, JournalEntry, LoggedActivity } from './journal';
+import type { CalendarEvent } from '../services/googleCalendar';
+
+export const getCurrentDreamSteps = (player: PlayerProfile) => player.dreamSteps.filter((step) => !step.archived);
+export const getActiveDreamStep = (player: PlayerProfile) => getCurrentDreamSteps(player).find((step) => !step.completed);
 
 export const defaultCareer: CareerProfile = {
   industry: '', responsibilities: '', managesTeam: false, usesSprints: false,
@@ -38,6 +42,33 @@ export function getRoadmapActions(step: DreamStep, lang: Language): string[] {
   const existing = (step.actions || []).filter((action) => typeof action === 'string' && action.trim()).slice(0, 6);
   if (existing.length) return existing;
   const subject = (step.skillName || step.title).slice(0, 70);
+  if (/skill inti|core skill/i.test(step.phase)) return lang === 'id' ? [
+    `Pilih satu alat atau teknik untuk berlatih ${subject}.`,
+    'Kerjakan satu contoh kecil dan simpan hasilnya sebagai pembanding.',
+    'Ulangi contoh dengan satu variasi, lalu catat kesalahan yang masih terjadi.',
+  ] : [
+    `Choose one tool or technique to practice ${subject}.`,
+    'Complete a small example and save it as a baseline.',
+    'Repeat with one variation and note the mistakes that remain.',
+  ];
+  if (/evaluasi|optimization/i.test(step.phase)) return lang === 'id' ? [
+    'Pilih satu hasil yang sudah dibuat dan tentukan cara menilai kualitasnya.',
+    'Bandingkan hasil dengan target, lalu catat selisih yang paling penting.',
+    'Perbaiki satu bagian dan ukur kembali hasilnya.',
+  ] : [
+    'Pick a deliverable and decide how to measure its quality.',
+    'Compare the result with your target and note the biggest gap.',
+    'Improve one part and measure it again.',
+  ];
+  if (/hasil nyata|first output|target tercapai|target achieved/i.test(step.phase)) return lang === 'id' ? [
+    `Tulis kriteria selesai untuk satu hasil dari ${subject}.`,
+    'Buat versi terkecil yang sudah bisa dicoba atau diperlihatkan.',
+    'Catat satu tanggapan atau hasil uji dan pilih perbaikan berikutnya.',
+  ] : [
+    `Write a clear definition of done for one result from ${subject}.`,
+    'Make the smallest version someone can try or review.',
+    'Record one reaction or test result and choose the next improvement.',
+  ];
   return lang === 'id' ? [
     `Tulis satu hasil yang ingin kamu buktikan lewat ${subject}.`,
     `Catat satu contoh yang bisa dijadikan acuan untuk ${subject}.`,
@@ -51,6 +82,118 @@ export function getRoadmapActions(step: DreamStep, lang: Language): string[] {
   ];
 }
 
+export function getNextRoadmapAction(step: DreamStep, lang: Language) {
+  return getRoadmapActions(step, lang).map((action) => action.slice(0, 140))
+    .find((action) => !step.completedActions?.includes(action));
+}
+
+export interface DailyTaskSuggestion {
+  title: string;
+  category: 'STUDY' | 'CAREER';
+  minutes: number;
+  skill: string;
+  reason: string;
+  stepId?: string;
+}
+
+export function planDailyFocus(player: PlayerProfile, evidence: DailyEvidence, events: CalendarEvent[],
+  phase: DayPhase, now: number, lang: Language) {
+  const id = lang === 'id';
+  const active = getActiveDreamStep(player);
+  const pending = player.quests.filter((task) => !task.completed);
+  const endOfDay = new Date(now);
+  endOfDay.setHours(24, 0, 0, 0);
+  const upcoming = events.filter((event) => !event.allDay && event.title.trim() &&
+    Date.parse(event.start) > now && Date.parse(event.start) < endOfDay.getTime()).sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const meeting = upcoming[0];
+  const light = evidence.status === 'rest' || evidence.status === 'watch';
+  const goalsDone = getCurrentDreamSteps(player).some((step) => step.completed);
+  const note = evidence.status === 'rest'
+    ? (id ? 'Sisihkan waktu untuk pulih. Pilih satu tindak lanjut singkat bila masih perlu.' : 'Make time to recover. Pick one short follow-up if needed.')
+    : phase === 'evening'
+      ? (id ? 'Tutup hari dengan mencatat hasil dan satu langkah untuk besok.' : 'Close the day by recording what you finished and one step for tomorrow.')
+      : light
+        ? (id ? 'Sisakan jeda dan pilih satu pekerjaan yang bisa selesai dalam waktu singkat.' : 'Leave room for a break and pick one short task.')
+        : active
+          ? (id ? `Lanjutkan tahap aktifmu · ${active.title}` : `Continue your active milestone · ${active.title}`)
+          : goalsDone
+            ? (id ? 'Tahapmu sudah selesai. Tinjau hasil sebelum memilih target berikutnya.' : 'Your milestones are complete. Review your results before picking the next goal.')
+            : (id ? 'Pilih satu hasil yang ingin kamu capai hari ini.' : 'Choose one outcome to achieve today.');
+
+  const candidates: Array<Omit<DailyTaskSuggestion, 'minutes'>> = [];
+  const projectSkill = id ? 'Manajemen proyek' : 'Project management';
+  if (meeting) candidates.push({
+    title: (id ? 'Siapkan bahan dan keputusan untuk ' : 'Prepare notes and decisions for ') + meeting.title,
+    category: 'CAREER', skill: projectSkill,
+    reason: id ? 'Ada acara berikutnya di agenda hari ini.' : 'This is the next event on your calendar today.',
+  });
+  if (evidence.status !== 'rest' && phase !== 'evening') {
+    const work = player.career;
+    if (work?.project && work.projectStatus === 'blocked') candidates.push({
+      title: id ? `Catat satu hambatan di ${work.project} dan siapa yang bisa membantu.` : `Identify one blocker on ${work.project} and who can help.`,
+      category: 'CAREER', skill: projectSkill,
+      reason: id ? 'Proyek ini kamu tandai terhambat.' : 'You marked this project as blocked.',
+    });
+    const action = active && getNextRoadmapAction(active, lang);
+    if (active && action) candidates.push({
+      title: action, category: 'CAREER', skill: active.skillName, stepId: active.id,
+      reason: active.completedActions?.length
+        ? (id ? 'Melanjutkan langkah yang sudah kamu selesaikan.' : 'Builds on the steps you have finished.')
+        : (id ? 'Langkah berikutnya pada tahap aktifmu.' : 'The next action for your active milestone.'),
+    });
+    if (work?.nextAction && work.projectStatus !== 'done') candidates.push({
+      title: work.nextAction, category: 'CAREER', skill: projectSkill,
+      reason: id ? 'Berasal dari tindak lanjut yang kamu catat di profil kerja.' : 'From the follow-up you saved in your work profile.',
+    });
+    if (work?.project && work.projectStatus === 'planning' && !work.nextAction) candidates.push({
+      title: id ? `Tentukan hasil pertama yang bisa ditunjukkan dari ${work.project}.` : `Define the first demonstrable outcome for ${work.project}.`,
+      category: 'CAREER', skill: projectSkill,
+      reason: id ? 'Proyek ini masih dalam tahap perencanaan.' : 'This project is still in planning.',
+    });
+    const practice = Object.values(player.skillProgress).filter((skill) => !skill.unlocked && skill.sessions > 0)
+      .sort((a, b) => Number(b.name === active?.skillName) - Number(a.name === active?.skillName) || b.sessions - a.sessions || b.totalMinutes - a.totalMinutes)[0];
+    if (practice) candidates.push({
+      title: id ? `Latih ${practice.name} dan catat satu hal yang membaik` : `Practice ${practice.name} and note one improvement`,
+      category: 'STUDY', skill: practice.name,
+      reason: id ? `Kamu sudah mencatat ${practice.sessions} sesi skill ini.` : `You have logged ${practice.sessions} sessions of this skill.`,
+    });
+    if (candidates.length <= 1 && !evidence.work && player.profession) candidates.push({
+      title: getCareerActions(player, lang)[0], category: 'CAREER', skill: projectSkill,
+      reason: id ? 'Saran berdasarkan profil kerja dan aktivitas hari ini.' : 'Based on your work profile and today’s activity.',
+    });
+  }
+
+  const known = new Set([...evidence.completed, ...player.quests.map((quest) => quest.title)].map((title) => title.trim().slice(0, 140).toLowerCase()));
+  const available = {
+    CAREER: player.dailyBreakdown.work - Math.max(evidence.work, player.dailyDurationLog.work),
+    STUDY: player.dailyBreakdown.study - Math.max(evidence.study, player.dailyDurationLog.study),
+  };
+  for (const task of pending) {
+    if (task.category === 'CAREER' || task.category === 'STUDY') {
+      available[task.category] -= task.unitType === 'MINUTES' ? task.defaultQty : task.estMinutes ?? 0;
+    }
+  }
+  let remaining = Math.max(0, player.dailyBreakdown.total - Math.max(evidence.minutesTotal,
+    player.dailyDurationLog.work + player.dailyDurationLog.study + player.dailyDurationLog.fitness));
+  remaining = Math.min(remaining, phase === 'evening' ? 10 : light ? 15 : 35);
+  const suggestions: DailyTaskSuggestion[] = [];
+  for (const candidate of candidates) {
+    const title = candidate.title.trim().slice(0, 140);
+    const key = title.toLowerCase();
+    const minutes = Math.min(light || phase === 'evening' ? 10 : 15, available[candidate.category], remaining);
+    if (!title || known.has(key) || minutes < 5) continue;
+    suggestions.push({ ...candidate, title, minutes });
+    known.add(key);
+    available[candidate.category] -= minutes;
+    remaining -= minutes;
+  }
+  const planned = active && pending.find((task) => task.dreamStepId === active.id);
+  const pendingNote = planned && !light && phase !== 'evening'
+    ? (id ? `Sudah ada di daftar · ${planned.title}` : `Already on your list · ${planned.title}`)
+    : '';
+  return { note, pendingNote, suggestions };
+}
+
 export function workoutPlan(player: PlayerProfile, evidence: DailyEvidence, entries: JournalEntry[], lang: Language) {
   const id = lang === 'id';
   const gym = player.gym;
@@ -59,18 +202,23 @@ export function workoutPlan(player: PlayerProfile, evidence: DailyEvidence, entr
   const latest = sessions[0];
   const recent = latest && Date.now() - latest.updatedAt <= 48 * 3600000;
   const stop = gym.currentPain || Boolean(recent && latest.workout?.pain);
-  const easy = evidence.status === 'rest' || evidence.shortSleep || evidence.meal === 'skipped' ||
+  const easy = evidence.status === 'rest' || evidence.busyDay || evidence.shortSleep || evidence.meal === 'skipped' ||
     Boolean(recent && latest.workout?.fatigue && latest.workout.fatigue !== 'manageable') || !!gym.limitations.trim();
   const weekly = Math.min(player.age < 18 ? 2 : 5, gym.days);
+  const weekStart = new Date();
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(weekStart.getDate() - (weekStart.getDay() + 6) % 7);
+  const activeDays = new Set(entries.filter((entry) => entry.kind === 'activity' && entry.category === 'FITNESS' &&
+    entry.minutes > 0 && Date.parse(entry.dateKey + 'T00:00:00') >= weekStart.getTime()).map((entry) => entry.dateKey)).size;
   const readinessText = stop
     ? (id ? 'Ada catatan nyeri. Tunda gerakan yang memicu nyeri. Jika nyeri menetap atau bertambah, konsultasikan dengan tenaga kesehatan.' : 'Pain was logged. Pause movements that cause it. Consult a health professional if pain persists or worsens.')
     : easy
-      ? (id ? 'Catatan tidur, makan, atau sesi terakhir menunjukkan kamu perlu menurunkan intensitas. Pilih sesi ringan bila nyaman.' : 'Your sleep, meals, or last session suggest easing up. Choose a light session if comfortable.')
+      ? (id ? 'Catatan aktivitas atau kondisi hari ini menyarankan sesi yang lebih ringan. Pilih latihan yang terasa nyaman.' : 'Your activity or check-in suggests a lighter session. Choose exercise that feels comfortable.')
       : (id ? 'Mulai dengan pemanasan ringan. Akhiri set sebelum teknik gerakan memburuk.' : 'Start with a light warm-up. End each set while you can maintain good form.');
   const sets = gym.level === 'regular' && gym.goal === 'strength' && !easy && player.age >= 18 ? 3 : easy ? 1 : 2;
   const reps = easy ? 6 : 8;
   const exercises: Array<{ title: string; minutes?: number; sets?: number; reps?: number }> = [];
-  if (stop) return { weekly, readinessText, exercises };
+  if (stop) return { weekly, activeDays, readinessText, exercises };
   if (easy || gym.goal === 'endurance') {
     exercises.push({ title: id ? 'Jalan santai sesuai kenyamanan' : 'Comfortable walk', minutes: easy ? 10 : 20 });
   } else {
@@ -80,7 +228,7 @@ export function workoutPlan(player: PlayerProfile, evidence: DailyEvidence, entr
       { title: gym.equipment === 'gym' ? 'Seated cable row' : (id ? 'Tarik siku ke belakang tanpa beban' : 'Unloaded elbow pull-back'), sets, reps },
     );
   }
-  return { weekly, readinessText, exercises };
+  return { weekly, activeDays, readinessText, exercises };
 }
 
 export function newWorkoutQuest(item: { title: string; minutes?: number; sets?: number; reps?: number }): Quest {

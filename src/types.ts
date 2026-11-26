@@ -89,6 +89,7 @@ export interface Quest {
 
 export interface DreamStep {
   id: string;
+  archived?: boolean;
   phase: string;
   title: string;
   coachTip: string;

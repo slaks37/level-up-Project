@@ -106,7 +106,9 @@ export function CoachSetupModal({ section, player, lang, onSave, onClose }: {
   </ModalShell>;
 }
 
-function CalendarPanel({ owner, lang, onTask }: { owner: string; lang: Language; onTask: (title: string) => void }) {
+function CalendarPanel({ owner, lang, onTask, onAgenda }: {
+  owner: string; lang: Language; onTask: (title: string) => void; onAgenda: (owner: string, events: CalendarEvent[]) => void;
+}) {
   const id = lang === 'id';
   const activeToken = useRef('');
   const [ready, setReady] = useState(false);
@@ -122,6 +124,7 @@ function CalendarPanel({ owner, lang, onTask }: { owner: string; lang: Language;
   const [imported, setImported] = useState(events.length > 0);
   const [error, setError] = useState('');
   const [now, setNow] = useState(Date.now);
+  useEffect(() => onAgenda(owner, events), [owner, events, onAgenda]);
   useEffect(() => {
     if (!events.length) return;
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
@@ -217,8 +220,9 @@ function CalendarPanel({ owner, lang, onTask }: { owner: string; lang: Language;
   </div>;
 }
 
-export function CareerCoach({ owner, player, lang, records, onEdit, onAdd }: {
+export function CareerCoach({ owner, player, lang, records, onEdit, onAdd, onAgenda }: {
   owner: string; player: PlayerProfile; lang: Language; records: JournalEntry[]; onEdit: () => void; onAdd: (title: string) => void;
+  onAgenda: (owner: string, events: CalendarEvent[]) => void;
 }) {
   const id = lang === 'id';
   const work = player.career;
@@ -240,7 +244,7 @@ export function CareerCoach({ owner, player, lang, records, onEdit, onAdd }: {
       </div>)}</div>
       {recent.length > 0 && <div><p className="font-bold">{id ? 'Pekerjaan tercatat terakhir' : 'Recent work logged'}</p>
         <ul className="list-disc space-y-1 pl-4">{recent.map((entry) => <li key={entry.id}>{entry.title} · {entry.dateKey}</li>)}</ul></div>}
-      <CalendarPanel owner={owner} lang={lang} onTask={onAdd} />
+      <CalendarPanel owner={owner} lang={lang} onTask={onAdd} onAgenda={onAgenda} />
       <a className="text-sky-800 underline" href="https://www.onetonline.org/link/details/13-1082.00" target="_blank" rel="noreferrer">{id ? 'Acuan peran dan pengelolaan proyek · O*NET' : 'Project management role reference · O*NET'}</a>
     </div>
   </section>;
@@ -260,6 +264,7 @@ export function GymCoach({ player, lang, evidence, records, onEdit, onAdd }: {
     <div className="space-y-2 p-3 text-xs">
       {plan ? <>
         <p className="font-bold">{id ? `Target ${plan.weekly} hari aktif per minggu` : `Aim for ${plan.weekly} active days per week`}</p>
+        <p className="text-slate-600">{id ? `${plan.activeDays} hari latihan tercatat minggu ini` : `${plan.activeDays} active days logged this week`}</p>
         <p role="status" className="rounded bg-emerald-50 p-2 text-emerald-950">{plan.readinessText}</p>
         <p className="text-slate-600">{id ? 'Sisakan hari pemulihan di antara sesi kekuatan. Catat set, repetisi, capek, dan nyeri setelah latihan.' : 'Leave recovery days between strength sessions. Log actual sets, repetitions, fatigue and pain afterward.'}</p>
         {plan.exercises.map((item) => {
