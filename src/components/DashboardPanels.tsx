@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import type {
   GrowthNewsItem,
+  DreamStep,
   Language,
   PlayerProfile,
   Quest,
@@ -25,6 +26,7 @@ import type {
 } from '../types';
 import { tr } from '../data/i18n';
 import { getActiveStage } from '../engine/science';
+import { getRoadmapActions } from '../engine/coaching';
 import { PromoNewsPanel } from './PromoNewsPanel';
 
 // =========================================================================
@@ -176,6 +178,7 @@ export const DreamRoadmapPanel: React.FC<{
   onGenerateRoadmap: () => void;
   onEditDream: () => void;
   onAddStep: () => void;
+  onAddRoadmapTask: (step: DreamStep, action: string) => void;
   onToggleStep: (stepId: string) => void;
   onDeleteStep: (stepId: string) => void;
 }> = ({
@@ -185,6 +188,7 @@ export const DreamRoadmapPanel: React.FC<{
   onGenerateRoadmap,
   onEditDream,
   onAddStep,
+  onAddRoadmapTask,
   onToggleStep,
   onDeleteStep,
 }) => {
@@ -353,6 +357,19 @@ export const DreamRoadmapPanel: React.FC<{
                           {step.coachTip}
                         </p>
                       )}
+                    <details className="mt-2 rounded border border-slate-200 bg-white p-2 text-xs">
+                      <summary className="cursor-pointer font-bold text-sky-900">{lang === 'id' ? 'Lihat langkah kecil' : 'See small steps'}</summary>
+                      <ol className="mt-1 list-decimal space-y-2 break-words pl-4">
+                        {getRoadmapActions(step, lang).map((action) => {
+                          const linked = player.quests.find((quest) => quest.title === action.slice(0, 140) && quest.dreamStepId === step.id);
+                          const done = Boolean(step.completedActions?.includes(action.slice(0, 140)) || linked?.completed);
+                          return <li key={action}>{action}{!step.completed && <button type="button" disabled={Boolean(linked) || done}
+                            className="ml-1 text-sky-800 underline disabled:text-slate-500" onClick={() => onAddRoadmapTask(step, action)}>
+                            {done ? (lang === 'id' ? 'Selesai' : 'Done') : linked ? (lang === 'id' ? 'Masuk daftar' : 'Added') : (lang === 'id' ? 'Jadikan tugas' : 'Add task')}
+                          </button>}</li>;
+                        })}
+                      </ol>
+                    </details>
 
                       <div className="mt-1.5 flex items-center gap-2">
                         <div className="flex-grow h-1.5 bg-white rounded-full overflow-hidden border border-slate-200">
@@ -592,7 +609,7 @@ export const DailyTasksPanel: React.FC<{
                       >
                         {q.category} •{' '}
                         {q.completed && q.completedQty ? q.completedQty : q.defaultQty}{' '}
-                        {q.unitType === 'REPS' ? 'REPS' : lang === 'id' ? 'MNT' : 'MIN'}
+                        {q.workout && !q.completed ? `REPS · ${q.workout.sets} × ${q.workout.reps}` : q.unitType === 'REPS' ? 'REPS' : lang === 'id' ? 'MNT' : 'MIN'}
                       </span>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         <span className="font-mono text-[9px] font-bold text-amber-700">

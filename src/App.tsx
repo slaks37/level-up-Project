@@ -4,6 +4,8 @@ import type {
   AIConfig,
   DailyLogEntry,
   GrowthNewsItem,
+  DreamStep,
+  WorkoutFeedback,
   FirebaseRuntimeConfig,
   Language,
   MobileTab,
@@ -62,6 +64,8 @@ import { MobileNav } from './components/MobileNav';
 import { AuthView } from './components/AuthView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AwakeningView } from './components/AwakeningView';
+import { getRoadmapActions } from './engine/coaching';
+import { CareerCoach, CoachSetupModal, GymCoach } from './components/CoachPanels';
 import { BodyConditionPanel, DailyCheckInModal, NutritionPanel } from './components/JournalPanels';
 import { getDailyEvidence, getGrowthActions, getJournalMoment, type CheckIn, type CheckInInput, type DayPhase } from './engine/journal';
 import { useJournal } from './services/useJournal';
@@ -100,6 +104,7 @@ type ActiveModal =
   | { type: 'settings'; tab: 'ai' | 'cloud' | 'app' }
   | { type: 'reset' }
   | { type: 'editBio' }
+  | { type: 'coachSetup'; section: 'career' | 'gym' }
   | { type: 'editDream' }
   | { type: 'addStep' }
   | { type: 'addQuest' }
@@ -119,6 +124,7 @@ export default function App() {
   const [dailyLogs, setDailyLogs] = useState<DailyLogEntry[]>(() => loadLocalLogs());
   const [moment, setMoment] = useState(getJournalMoment);
   const promptedCheckIns = useRef(new Set<string>());
+  const promptedGym = useRef(new Set<string>());
   const [aiConfig, setAIConfig] = useState<AIConfig>(() => loadAIConfig());
   const [sfxMutedState, setSfxMutedState] = useState<boolean>(() => {
     const m = loadSfxMuted();
@@ -293,6 +299,8 @@ export default function App() {
       unsubAuth = subscribeAuth((user) => {
         if (cancelled) return;
         setCloudUser(user);
+        setIsAdmin(false);
+        setIsUnverifiedBootstrapAdmin(false);
         activeUid = user?.uid;
         setDailyLogs(loadLocalLogs(activeUid));
         setAuthResolved(true);
@@ -319,7 +327,7 @@ export default function App() {
 
         // Check Admin privileges & register/update user directory doc
         void checkIsUserAdmin(user).then((adminStatus) => {
-          if (cancelled) return;
+          if (cancelled || activeUid !== user.uid) return;
           setIsAdmin(adminStatus.isAdmin);
           setIsUnverifiedBootstrapAdmin(adminStatus.isUnverifiedBootstrapAdmin);
           void upsertUserMeta(user, langRef.current, adminStatus.isAdmin).catch(() => {});
@@ -418,7 +426,7 @@ export default function App() {
       'success'
     );
 
-    if (aiConfig.apiKey.trim() || (cloudUser && sharedAIConfig?.enabled && sharedAIConfig?.proxyConfigured)) {
+    if (aiConfig.apiKey.trim() || (cloudUser && (Boolean(import.meta.env.VITE_AI_PROXY_URL) || (sharedAIConfig?.enabled && sharedAIConfig?.proxyConfigured)))) {
       void runGenerateRoadmap(created, true);
     }
   };
@@ -426,20 +434,37 @@ export default function App() {
   // =========================================================================
   // AI ACTIONS (SHARED ADMIN PROXY -> PERSONAL BYOK -> SMART FALLBACK)
   // =========================================================================
-  const runGenerateRoadmap = async (targetPlayer?: PlayerProfile, silent = false) => {
+  const runGenerateRoadmap = async (targetPlayer?: PlayerProfile, silent = false, changedGoal = false) => {
     const active = targetPlayer ?? playerRef.current;
     if (!active) return;
 
+    const requestUid = cloudUserRef.current?.uid;
     setIsGeneratingRoadmap(true);
-    const res = await generateAIDreamRoadmap(active, lang, aiConfig);
+    const res = await generateAIDreamRoadmap(active, lang, aiConfig, !changedGoal && active.dreamSteps.some((step) => step.completed || step.completedMinutes > 0));
     setIsGeneratingRoadmap(false);
 
-    const latest = playerRef.current ?? active;
-    commitPlayerChange({
-      ...latest,
-      dreamSteps: res.dreamSteps,
-      coachAdvice: res.coachAdvice,
-    });
+    const latest = playerRef.current;
+    if (!latest || latest.goal !== active.goal || cloudUserRef.current?.uid !== requestUid) return;
+    const hasProgress = latest.dreamSteps.some((step) => step.completed || step.completedMinutes > 0);
+    const generated = res.dreamSteps.map((step) => changedGoal ? { ...step, id: 'goal-' + crypto.randomUUID(), completed: false, completedMinutes: 0 } : step);
+    const dreamSteps = changedGoal
+      ? [...latest.dreamSteps.filter((step) => step.completed || step.completedMinutes > 0), ...generated].slice(0, 50)
+      : hasProgress
+        ? latest.dreamSteps.map((step) => {
+          const suggestion = generated.find((candidate) => candidate.title === step.title);
+          return suggestion?.actions?.length && !step.completed
+            ? { ...step, actions: [...new Set([...(step.completedActions || []), ...suggestion.actions])].slice(0, 6) } : step;
+        })
+        : generated.map((step, index) => ({ ...step, id: latest.dreamSteps[index]?.id || step.id }));
+    const firstStep = (changedGoal ? generated : dreamSteps).find((step) => !step.completed);
+    const firstAction = firstStep && getRoadmapActions(firstStep, lang)[0]?.slice(0, 140);
+    const nextTasks = (silent || changedGoal) && firstStep && firstAction && !latest.quests.some((quest) => quest.title === firstAction)
+      ? [{
+          id: crypto.randomUUID(), title: firstAction, category: 'CAREER' as const, unitType: 'MINUTES' as const,
+          defaultQty: 15, skillTag: firstStep.skillName, dreamStepId: firstStep.id, exp: 30, gold: 20, completed: false,
+        }, ...latest.quests].slice(0, 100)
+      : latest.quests;
+    commitPlayerChange({ ...latest, dreamSteps, coachAdvice: res.coachAdvice, quests: nextTasks });
 
     if (!silent) {
       playSFX('quest');
@@ -475,10 +500,11 @@ export default function App() {
     const res = await generateAIQuests(player, lang, aiConfig);
     setIsGeneratingQuests(false);
 
-    commitPlayerChange({
-      ...player,
-      quests: res.quests,
-    });
+    const current = playerRef.current;
+    if (!current || current.goal !== player.goal) return;
+    const generated = res.quests.filter((quest) => quest.category !== 'FITNESS' &&
+      !current.quests.some((existing) => existing.title === quest.title));
+    commitPlayerChange({ ...current, quests: [...current.quests, ...generated].slice(0, 100) });
 
     playSFX('quest');
     if (res.usedFallback) {
@@ -509,13 +535,21 @@ export default function App() {
   // =========================================================================
   // GAMEPLAY & PROGRESS HANDLERS
   // =========================================================================
-  const handleConfirmCompleteQuest = (quest: Quest, qty: number, rpe: number) => {
+  const handleConfirmCompleteQuest = (quest: Quest, qty: number, rpe: number, workout?: WorkoutFeedback) => {
     if (!player) return;
+    const { dateKey } = getJournalMoment();
+    if (workout?.pain && qty <= 0) {
+      journal.save({ id: dateKey + '-task-' + encodeURIComponent(quest.id), dateKey, kind: 'activity',
+        title: (quest.title + (lang === 'id' ? ' (dihentikan)' : ' (stopped)')).slice(0, 140), category: 'FITNESS',
+        minutes: 0, updatedAt: Date.now(), workout });
+      setModal(null);
+      notify(lang === 'id' ? 'Catatan latihan dan nyeri tersimpan.' : 'Workout and pain notes saved.', 'info');
+      return;
+    }
     try {
       const { nextPlayer, result, levelsGained, unlockedSkill, autoCompletedStepTitle } =
         applyQuestCompletion(player, quest.id, qty, rpe, lang);
 
-      const { dateKey } = getJournalMoment();
       journal.save({
         id: dateKey + '-task-' + encodeURIComponent(quest.id),
         dateKey,
@@ -524,8 +558,13 @@ export default function App() {
         category: quest.category,
         minutes: Math.min(1440, Math.max(0, Math.round(result.loggedMinutes))),
         updatedAt: Date.now(),
+        ...(workout ? { workout } : {}),
       });
-      commitPlayerChange(nextPlayer);
+      const dreamSteps = nextPlayer.dreamSteps.map((step) => step.id === quest.dreamStepId &&
+        getRoadmapActions(step, lang).some((action) => action.slice(0, 140) === quest.title)
+        ? { ...step, completedActions: [...new Set([...(step.completedActions || []), quest.title])].slice(0, 30) }
+        : step);
+      commitPlayerChange({ ...nextPlayer, dreamSteps });
       setModal(null);
 
       if (levelsGained > 0) {
@@ -686,7 +725,8 @@ export default function App() {
       player.dreamSteps.find((s) => !s.completed) || player.dreamSteps[0];
     const refreshedQuests =
       player.quests.length > 0
-        ? player.quests.map((q) => {
+        ? player.quests.filter((quest) => !player.dreamSteps.some((step) =>
+            step.id === quest.dreamStepId && step.completedActions?.includes(quest.title))).map((q) => {
             const { completedQty: _cq, completedRpe: _cr, ...cleanQuest } = q;
             return { ...cleanQuest, completed: false };
           })
@@ -899,18 +939,44 @@ export default function App() {
   const currentCheckInId = dateKey + '-' + phase;
   const hasCheckIn = journal.records.some((entry) => entry.id === currentCheckInId);
   const isPlayerReady = Boolean(player) && authResolved && !isAdminView && !showAuthScreen && journal.ready;
+  const missingGym = Boolean(player && !player.gym);
   useEffect(() => {
     if (modal?.type === 'checkIn' && modal.owner !== journal.key) {
       setModal(null);
       return;
     }
-    const key = journal.key + ':' + currentCheckInId;
-    if (!isPlayerReady || hasCheckIn || modal || promptedCheckIns.current.has(key)) return;
-    promptedCheckIns.current.add(key);
-    setModal({ type: 'checkIn', dateKey, phase, owner: journal.key });
-  }, [isPlayerReady, hasCheckIn, modal, journal.key, currentCheckInId, dateKey, phase]);
+    if (!isPlayerReady || modal) return;
+    const checkInKey = journal.key + ':' + currentCheckInId;
+    if (!hasCheckIn && !promptedCheckIns.current.has(checkInKey)) {
+      promptedCheckIns.current.add(checkInKey);
+      setModal({ type: 'checkIn', dateKey, phase, owner: journal.key });
+      return;
+    }
+    const gymKey = journal.key + ':' + dateKey;
+    if (missingGym && !promptedGym.current.has(gymKey)) {
+      promptedGym.current.add(gymKey);
+      setModal({ type: 'coachSetup', section: 'gym' });
+    }
+  }, [isPlayerReady, hasCheckIn, modal, journal.key, currentCheckInId, dateKey, phase, missingGym]);
 
   const evidence = getDailyEvidence(journal.records, dailyLogs, dateKey, player?.age ?? 18);
+  const addCoachQuest = (quest: Quest) => {
+    const current = playerRef.current;
+    if (!current || current.quests.length >= 100 || current.quests.some((item) => item.title === quest.title && item.category === quest.category && item.dreamStepId === quest.dreamStepId)) return;
+    commitPlayerChange({ ...current, quests: [quest, ...current.quests] });
+    notify(lang === 'id' ? 'Ditambahkan ke tugas harian.' : 'Added to daily tasks.', 'success');
+  };
+  const addMicroTask = (title: string, step?: DreamStep) => {
+    const clean = title.trim().slice(0, 140);
+    if (!clean) return;
+    addCoachQuest({
+      id: crypto.randomUUID(), title: clean, category: 'CAREER', unitType: 'MINUTES',
+      defaultQty: 15, skillTag: step?.skillName || (lang === 'id' ? 'Manajemen proyek' : 'Project management'),
+      ...(step ? { dreamStepId: step.id } : {}),
+      exp: 30, gold: 20, completed: false,
+    });
+  };
+
   const openCheckIn = () => setModal({ type: 'checkIn', ...getJournalMoment(), owner: journal.key });
   const saveCheckIn = (input: CheckInInput) => {
     if (modal?.type !== 'checkIn' || modal.owner !== journal.key) return;
@@ -949,6 +1015,7 @@ export default function App() {
         onOpenScience={() => setModal({ type: 'science' })}
         onOpenSettings={(tab = 'ai') => setModal({ type: 'settings', tab })}
         onOpenReset={() => setModal({ type: 'reset' })}
+        onOpenProfile={() => setModal({ type: 'editBio' })}
       />
 
       {/* Optional Admin Broadcast Notice */}
@@ -973,7 +1040,7 @@ export default function App() {
         ) : shouldShowAuthGate ? (
           <AuthView
             lang={lang}
-            adminOnly={isDedicatedAdminHost}
+            adminOnly={isAdminView}
             onExit={() => {
               if (isDedicatedAdminHost) {
                 navigateAdminView(false);
@@ -1020,7 +1087,7 @@ export default function App() {
                 <StatusPanel player={player} lang={lang} />
               </div>
               <div className="lg:col-span-4">
-                <NutritionPanel lang={lang} evidence={evidence} onOpen={openCheckIn} onEditProfile={() => setModal({ type: 'editBio' })} />
+                <NutritionPanel lang={lang} evidence={evidence} onOpen={openCheckIn} />
               </div>
               <div className="lg:col-span-4">
                 <BodyConditionPanel key={avatarOwner} owner={avatarOwner} evidence={evidence} phase={phase}
@@ -1042,6 +1109,7 @@ export default function App() {
                   onGenerateRoadmap={() => void runGenerateRoadmap()}
                   onEditDream={() => setModal({ type: 'editDream' })}
                   onAddStep={() => setModal({ type: 'addStep' })}
+                  onAddRoadmapTask={(step, action) => addMicroTask(action, step)}
                   onToggleStep={handleToggleDreamStep}
                   onDeleteStep={(stepId) => {
                     playSFX('click');
@@ -1092,6 +1160,13 @@ export default function App() {
                   onOpenAddSkill={() => setModal({ type: 'addSkill' })}
                 />
               </div>
+            </div>
+
+            <div className={`grid gap-4 lg:grid-cols-2 ${mobileTab !== 'tasks' ? 'hidden lg:grid' : ''}`}>
+              <CareerCoach key={journal.key} owner={journal.key} player={player} lang={lang} records={journal.records}
+                onEdit={() => setModal({ type: 'coachSetup', section: 'career' })} onAdd={addMicroTask} />
+              <GymCoach player={player} lang={lang} evidence={evidence} records={journal.records}
+                onEdit={() => setModal({ type: 'coachSetup', section: 'gym' })} onAdd={addCoachQuest} />
             </div>
 
             {/* ROW 3: REWARD EXCHANGE + GROWTH NEWS */}
@@ -1159,6 +1234,16 @@ export default function App() {
         />
       )}
 
+      {modal?.type === 'coachSetup' && player && (
+        <CoachSetupModal section={modal.section} player={player} lang={lang}
+          onClose={() => setModal(null)} onSave={(profile) => {
+            const current = playerRef.current;
+            if (!current) return;
+            commitPlayerChange({ ...current, ...profile });
+            setModal(null);
+          }} />
+      )}
+
       {modal?.type === 'editBio' && player && (
         <EditBioModal
           player={player}
@@ -1189,21 +1274,11 @@ export default function App() {
           lang={lang}
           onSave={(goal, targetLevel, dailyBudget) => {
             const dailyBreakdown = computeDailyDurationBreakdown(dailyBudget, player.bio);
-            commitPlayerChange({
-              ...player,
-              goal,
-              targetLevel,
-              dailyBreakdown,
-              boss: { ...player.boss, name: goal, desc: goal },
-            });
+            const next = { ...player, goal, targetLevel, dailyBreakdown, boss: { ...player.boss, name: goal, desc: goal } };
+            const changed = goal !== player.goal;
+            commitPlayerChange(next);
             setModal(null);
-            playSFX('quest');
-            notify(
-              lang === 'id'
-                ? 'Impian & target waktu diperbarui! Klik RENCANA AI COACH untuk menyelaraskan tahapan.'
-                : 'Dream & time targets updated! Click AI COACH PLAN to realign milestones.',
-              'success'
-            );
+            if (cloudUser || aiConfig.apiKey.trim() || changed) void runGenerateRoadmap(next, false, changed);
           }}
           onClose={() => setModal(null)}
         />
@@ -1269,7 +1344,7 @@ export default function App() {
           player={player}
           quest={modal.quest}
           lang={lang}
-          onConfirm={(qty, rpe) => handleConfirmCompleteQuest(modal.quest, qty, rpe)}
+          onConfirm={(qty, rpe, workout) => handleConfirmCompleteQuest(modal.quest, qty, rpe, workout)}
           onClose={() => setModal(null)}
         />
       )}
@@ -1312,7 +1387,7 @@ export default function App() {
         const id = modal.dateKey + '-' + modal.phase;
         const saved = journal.records.find((entry): entry is CheckIn => entry.kind === 'checkin' && entry.id === id);
         return <DailyCheckInModal key={journal.key + id} name={player.name} lang={lang} phase={modal.phase} initial={saved}
-          evidence={getDailyEvidence(journal.records, dailyLogs, modal.dateKey, player.age)} onSave={saveCheckIn} onClose={() => setModal(null)} />;
+          photoKey={'meal:' + journal.key + ':' + id} evidence={getDailyEvidence(journal.records, dailyLogs, modal.dateKey, player.age)} onSave={saveCheckIn} onClose={() => setModal(null)} />;
       })()}
 
       {modal?.type === 'completeDay' && player && (

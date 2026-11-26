@@ -638,6 +638,8 @@ export interface CreateProfileInput {
   targetLevel: number;
   dailyBudget: number;
   customProfName?: string;
+  career?: PlayerProfile['career'];
+  gym?: PlayerProfile['gym'];
   selectedPreset: ProfessionPreset;
   lang: Language;
 }
@@ -681,6 +683,8 @@ export function createInitialPlayerProfile(input: CreateProfileInput): PlayerPro
     rewardInterest: input.rewardInterest.trim(),
     bio,
     profession: profName,
+    ...(input.career ? { career: input.career } : {}),
+    ...(input.gym ? { gym: input.gym } : {}),
     classTitle,
     goal: input.goal.trim(),
     targetLevel: input.targetLevel,
@@ -745,6 +749,8 @@ export function normalizePlayerProfile(raw: Partial<PlayerProfile>, lang: Langua
     rewardInterest,
     bio,
     profession,
+    ...(raw.career ? { career: raw.career } : {}),
+    ...(raw.gym ? { gym: raw.gym } : {}),
     classTitle: raw.classTitle || 'Awakened Vanguard',
     goal,
     targetLevel,

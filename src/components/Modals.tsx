@@ -19,6 +19,7 @@ import type {
   Quest,
   QuestCategory,
   QuestUnitType,
+  WorkoutFeedback,
 } from '../types';
 import { computeScientificStatGains } from '../engine/science';
 
@@ -65,15 +66,22 @@ export const CompleteQuestModal: React.FC<{
   player: PlayerProfile;
   quest: Quest;
   lang: Language;
-  onConfirm: (qty: number, rpe: number) => void;
+  onConfirm: (qty: number, rpe: number, workout?: WorkoutFeedback) => void;
   onClose: () => void;
 }> = ({ player, quest, lang, onConfirm, onClose }) => {
   const [qty, setQty] = useState(quest.defaultQty);
   const [rpe, setRpe] = useState(8);
+  const fitness = quest.category === 'FITNESS';
+  const id = lang === 'id';
+  const [fatigue, setFatigue] = useState<WorkoutFeedback['fatigue'] | ''>('');
+  const [pain, setPain] = useState<'yes' | 'no' | ''>('');
+  const [sets, setSets] = useState<number[]>(() => quest.workout ? Array(Math.max(1, Math.min(6, Math.round(quest.workout.sets) || 1))).fill(0) : []);
+  const actual = quest.workout ? sets.reduce((sum, reps) => sum + reps, 0) : qty;
+
 
   const preview = useMemo(
-    () => computeScientificStatGains(player, quest, qty, rpe),
-    [player, quest, qty, rpe]
+    () => computeScientificStatGains(player, quest, actual, rpe),
+    [player, quest, actual, rpe]
   );
 
   const rpeDesc =
@@ -106,30 +114,41 @@ export const CompleteQuestModal: React.FC<{
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onConfirm(qty, rpe);
+          if (fitness && (!fatigue || !pain || (actual <= 0 && pain !== 'yes'))) return;
+          onConfirm(actual, rpe, fitness && fatigue ? { fatigue, pain: pain === 'yes', setReps: sets.join(',') } : undefined);
         }}
         className="space-y-3"
       >
-        <div>
-          <label className="block text-xs font-bold text-slate-700 mb-1">
-            {quest.unitType === 'REPS'
-              ? lang === 'id'
-                ? 'Jumlah Repetisi Nyata yang Dilakukan (Reps)'
-                : 'Actual Repetitions Completed (Reps)'
-              : lang === 'id'
-                ? 'Durasi Fokus Nyata (Menit)'
-                : 'Actual Focused Duration (Minutes)'}
+        {quest.workout ? <fieldset className="space-y-2">
+          <legend className="text-xs font-bold">{id ? 'Repetisi aktual per set' : 'Actual repetitions per set'}</legend>
+          <p className="text-xs text-slate-600">{id ? 'Rencana' : 'Plan'} · {quest.workout.sets} set × {quest.workout.reps} reps</p>
+          <div className="grid grid-cols-3 gap-2">{sets.map((reps, index) => <label key={index} className="block text-xs">
+            Set {index + 1}<input type="number" min="0" max="100" inputMode="numeric" value={reps}
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" onChange={(event) => {
+                const value = Math.max(0, Math.min(100, Number(event.target.value) || 0));
+                setSets((current) => current.map((item, at) => at === index ? value : item));
+              }} />
+          </label>)}</div>
+        </fieldset> : <label className="block text-xs font-bold text-slate-700">
+          {quest.unitType === 'REPS' ? (id ? 'Repetisi aktual' : 'Actual repetitions') : (id ? 'Durasi aktual (menit)' : 'Actual duration (minutes)')}
+          <input type="number" min={fitness ? 0 : 1} max={600} required value={qty}
+            onChange={(event) => setQty(Math.max(0, Number(event.target.value) || 0))}
+            className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+        </label>}
+        {fitness && <fieldset className="grid gap-2 sm:grid-cols-2">
+          <legend className="mb-1 text-xs font-bold">{id ? 'Bagaimana sesi latihanmu?' : 'How did the workout feel?'}</legend>
+          <label className="space-y-1 text-xs"><span id="workout-fatigue">{id ? 'Seberapa capek?' : 'How tired?'}</span>
+            <select aria-labelledby="workout-fatigue" required className="w-full rounded border border-slate-300 p-2" value={fatigue} onChange={(e) => setFatigue(e.target.value as typeof fatigue)}>
+              <option value="">{id ? 'Pilih' : 'Select'}</option><option value="manageable">{id ? 'Masih nyaman' : 'Manageable'}</option><option value="tired">{id ? 'Cukup capek' : 'Tired'}</option><option value="very_tired">{id ? 'Sangat capek' : 'Very tired'}</option>
+            </select>
           </label>
-          <input
-            type="number"
-            min={5}
-            max={600}
-            required
-            value={qty}
-            onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))}
-            className="w-full px-3 py-2 rounded border border-slate-300 font-mono text-sm font-bold text-slate-900 focus:outline-none focus:border-sky-600"
-          />
-        </div>
+          <label className="space-y-1 text-xs"><span id="workout-pain">{id ? 'Ada nyeri baru atau bertambah?' : 'Any new or worsening pain?'}</span>
+            <select aria-labelledby="workout-pain" required className="w-full rounded border border-slate-300 p-2" value={pain} onChange={(e) => setPain(e.target.value as typeof pain)}>
+              <option value="">{id ? 'Pilih' : 'Select'}</option><option value="no">{id ? 'Tidak' : 'No'}</option><option value="yes">{id ? 'Ya' : 'Yes'}</option>
+            </select>
+          </label>
+          {pain === 'yes' && <p className="rounded bg-amber-50 p-2 text-xs text-amber-950 sm:col-span-2">{id ? 'Hentikan gerakan yang memicu nyeri. Kamu tetap bisa menyimpan catatan sesi ini.' : 'Stop the movement that causes pain. You can still save your session notes.'}</p>}
+        </fieldset>}
 
         <div>
           <div className="flex justify-between items-center text-xs font-bold text-slate-700 mb-1">
@@ -193,9 +212,10 @@ export const CompleteQuestModal: React.FC<{
 
         <button
           type="submit"
-          className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-hud font-bold text-xs uppercase tracking-wider btn-anime"
+          disabled={fitness && (!fatigue || !pain || (actual <= 0 && pain !== 'yes'))}
+          className="disabled:opacity-50 w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-hud font-bold text-xs uppercase tracking-wider btn-anime"
         >
-          {lang === 'id' ? 'KONFIRMASI & KLAIM PROGRES' : 'CONFIRM & CLAIM PROGRESS'}
+          {fitness && actual <= 0 ? (id ? 'SIMPAN CATATAN LATIHAN' : 'SAVE WORKOUT NOTES') : (id ? 'KONFIRMASI & KLAIM PROGRES' : 'CONFIRM & CLAIM PROGRESS')}
         </button>
       </form>
     </ModalShell>
@@ -219,12 +239,11 @@ export const ScienceModal: React.FC<{ lang: Language; onClose: () => void }> = (
     <div className="space-y-3 text-xs leading-relaxed">
       <div className="p-3 rounded bg-slate-50 border border-slate-200">
         <p className="font-bold text-slate-900">
-          1. {lang === 'id' ? 'Panduan porsi makan' : 'Meal portion guide'}
+          1. {lang === 'id' ? 'Catatan makan' : 'Meal journal'}
         </p>
         <p className="mt-1 text-slate-600">{lang === 'id'
-          ? 'Isi Piringku dari Kemenkes membagi porsi satu kali makan antara sayur dan buah, serta makanan pokok dan lauk.'
-          : 'Indonesia’s Ministry of Health plate guide splits one meal between vegetables and fruit, and staple foods and protein.'}</p>
-        <a href="https://ayosehat.kemkes.go.id/isi-piringku-kebutuhan-gizi-harian-seimbang" target="_blank" rel="noreferrer" className="text-sky-700 underline">Isi Piringku</a>
+          ? 'Kelompok makanan, rasa, dan foto membantu kamu mengingat apa yang dimakan.'
+          : 'Food groups, taste notes, and meal photos help you remember what you ate.'}</p>
       </div>
       <div className="p-3 rounded bg-slate-50 border border-slate-200">
         <p className="font-bold text-slate-900">2. {lang === 'id' ? 'Durasi tidur dan energi' : 'Sleep duration and energy'}</p>

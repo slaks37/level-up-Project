@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Settings,
   Shield,
+  UserRound,
 } from 'lucide-react';
 import type { User } from 'firebase/auth';
 import type { Language, SyncStatus } from '../types';
@@ -30,6 +31,7 @@ interface HeaderProps {
   onOpenScience: () => void;
   onOpenSettings: (tab?: 'ai' | 'cloud' | 'app') => void;
   onOpenReset: () => void;
+  onOpenProfile: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -47,6 +49,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenScience,
   onOpenSettings,
   onOpenReset,
+  onOpenProfile,
 }) => {
   const syncBadge = (() => {
     switch (syncStatus) {
@@ -205,6 +208,12 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="hidden lg:inline">{tr(lang, 'btnSettingsLbl')}</span>
           </button>
 
+          {hasPlayer && !isAdminView && (
+            <button type="button" onClick={onOpenProfile} aria-label={lang === 'id' ? 'Profil' : 'Profile'}
+              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-slate-700 hover:bg-sky-50">
+              <UserRound className="size-3.5" />
+            </button>
+          )}
           {/* Reset Profile */}
           {hasPlayer && !isAdminView && (
             <button

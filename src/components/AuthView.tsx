@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Cloud,
   Cpu,
@@ -15,9 +15,12 @@ import type { Language } from '../types';
 import {
   sendPasswordReset,
   signInWithEmail,
+  signInExistingAdminWithGoogle,
+  requireAdminSession,
   signInWithGoogle,
   signUpWithEmail,
 } from '../services/firebaseService';
+import { prepareGoogleOAuth } from '../services/googleCalendar';
 
 interface AuthViewProps {
   lang: Language;
@@ -27,6 +30,12 @@ interface AuthViewProps {
 }
 
 function translateAuthError(err: unknown, lang: Language): string {
+  if (err instanceof Error && err.message === 'ADMIN_ACCESS_REQUIRED') {
+    return lang === 'id' ? 'Gunakan akun dengan email terverifikasi yang sudah diberi akses admin.' : 'Use a verified email that already has admin access.';
+  }
+  if (err instanceof Error && err.message.startsWith('GOOGLE_')) {
+    return lang === 'id' ? 'Login Google belum selesai. Buka aplikasi di Chrome atau Safari, lalu coba lagi.' : 'Google sign-in did not finish. Open the app in Chrome or Safari and retry.';
+  }
   const code = (err as { code?: string })?.code || '';
   const mapId: Record<string, string> = {
     'auth/invalid-credential': 'Email atau password salah. Periksa kembali.',
@@ -66,6 +75,13 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [adminGoogleReady, setAdminGoogleReady] = useState(false);
+  useEffect(() => {
+    if (!adminOnly) return;
+    let active = true;
+    void prepareGoogleOAuth().then(() => { if (active) setAdminGoogleReady(true); }).catch(() => {});
+    return () => { active = false; };
+  }, [adminOnly]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,14 +107,15 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
     setBusy(true);
     try {
       if (mode === 'login') {
-        await signInWithEmail(email, password);
+        const user = await signInWithEmail(email, password);
+        if (adminOnly) await requireAdminSession(user);
         onNotify(
           lang === 'id'
             ? 'Berhasil masuk! Menyinkronkan data dari Cloud...'
             : 'Signed in! Syncing your data from Cloud...',
           'success'
         );
-      } else if (mode === 'register') {
+      } else if (mode === 'register' && !adminOnly) {
         await signUpWithEmail(email, password, displayName);
         onNotify(
           lang === 'id'
@@ -126,7 +143,8 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
   const handleGoogle = async () => {
     setBusy(true);
     try {
-      await signInWithGoogle();
+      if (adminOnly) await signInExistingAdminWithGoogle();
+      else await signInWithGoogle();
       onNotify(
         lang === 'id'
           ? 'Berhasil login dengan Google! Sinkronisasi aktif.'
@@ -164,7 +182,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
             <p className="text-xs text-slate-600">
               {adminOnly
                 ? lang === 'id'
-                  ? 'Masuk dengan akun yang memiliki akses admin.'
+                  ? 'Masuk dengan email terverifikasi yang sudah diberi akses admin.'
                   : 'Sign in with an account that has admin access.'
                 : lang === 'id'
                   ? 'Masuk dengan Email atau Google untuk sinkronisasi otomatis HP ↔ Laptop dan akses Shared Agnes AI.'
@@ -324,7 +342,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
 
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || (adminOnly && !adminGoogleReady)}
             onClick={handleGoogle}
             className="w-full py-2.5 px-4 rounded bg-white hover:bg-slate-50 border border-slate-300 text-slate-900 font-hud font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 btn-anime"
           >

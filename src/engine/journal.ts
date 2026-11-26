@@ -1,4 +1,4 @@
-import type { DailyLogEntry, GrowthNewsItem, Language, PlayerProfile, QuestCategory } from '../types';
+import type { DailyLogEntry, GrowthNewsItem, Language, PlayerProfile, QuestCategory, WorkoutFeedback } from '../types';
 
 export type DayPhase = 'morning' | 'day' | 'evening';
 export type MealPattern = '' | 'skipped' | 'partial' | 'varied';
@@ -7,6 +7,8 @@ export interface CheckInInput {
   sleepHours: number | null;
   meal: MealPattern;
   mealNote: string;
+  mealEnjoyment?: 'enjoyed' | 'neutral' | 'did_not_enjoy' | '';
+  mealGroups?: string[];
   energy: EnergyFeeling;
   note: string;
   extraMinutes: number;
@@ -25,6 +27,7 @@ export interface LoggedActivity extends JournalRecord {
   title: string;
   minutes: number;
   category: QuestCategory;
+  workout?: WorkoutFeedback;
 }
 export type JournalEntry = CheckIn | LoggedActivity;
 
@@ -50,7 +53,10 @@ export function getDailyEvidence(entries: JournalEntry[], logs: DailyLogEntry[],
   const latest = [...checks].sort((a, b) => b.updatedAt - a.updatedAt);
   const sleep = latest.find((entry) => entry.sleepHours !== null)?.sleepHours ?? null;
   const meal = latest.find((entry) => entry.meal)?.meal ?? '';
-  const mealNote = latest.find((entry) => entry.mealNote)?.mealNote ?? '';
+  const loggedMeal = latest.find((entry) => entry.mealNote || entry.mealGroups?.length || entry.mealEnjoyment);
+  const mealNote = loggedMeal?.mealNote || '';
+  const mealGroups = loggedMeal?.mealGroups || [];
+  const mealEnjoyment = loggedMeal?.mealEnjoyment || '';
   const energy = latest.find((entry) => entry.energy)?.energy ?? '';
   const closed = logs.find((entry) => entry.dateKey === dateKey);
   const minutes = (category: QuestCategory, legacy = 0) => Math.max(legacy,
@@ -78,7 +84,7 @@ export function getDailyEvidence(entries: JournalEntry[], logs: DailyLogEntry[],
     (busyDay && meal === 'skipped');
   const status = needsBreak ? 'rest' : shortSleep || shortPattern || busyDay || meal === 'skipped' ? 'watch' :
     energy === 'fresh' || energy === 'steady' || (sleep !== null && meal === 'varied') ? 'steady' : 'unknown';
-  return { sleep, meal, mealNote, energy, work, study, fitness, extra, minutesTotal, completed, recentSleep, shortSleep, shortPattern, busyDay, status,
+  return { sleep, meal, mealNote, mealGroups, mealEnjoyment, energy, work, study, fitness, extra, minutesTotal, completed, recentSleep, shortSleep, shortPattern, busyDay, status,
     completedCount: Math.max(tasks.length, closed?.completedTasks ?? 0),
     plan: checks.find((entry) => entry.phase === 'morning')?.note ?? '' } as const;
 }

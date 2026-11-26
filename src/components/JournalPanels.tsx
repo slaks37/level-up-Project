@@ -4,6 +4,7 @@ import { ModalShell } from './Modals';
 import type { Language } from '../types';
 import { journalEncouragement, type CheckInInput, type DailyEvidence, type DayPhase } from '../engine/journal';
 import { deleteAvatarPhoto, loadAvatarPhoto, saveAvatarPhoto } from '../services/avatarStorage';
+import { imageForLocalJournal } from '../services/localPhoto';
 import { tr } from '../data/i18n';
 
 const COLUMNS = 'grid grid-cols-3 gap-2 text-center';
@@ -23,38 +24,35 @@ const ENERGY = {
   tired: { id: 'Lelah', en: 'Tired' },
 };
 
-export function NutritionPanel({ evidence, onOpen, onEditProfile, lang }: { evidence: DailyEvidence; onOpen: () => void; onEditProfile: () => void; lang: Language }) {
+const mealGroupLabels: Record<string, Record<Language, string>> = {
+  staple: { id: 'Makanan pokok', en: 'Staple food' },
+  protein: { id: 'Lauk / protein', en: 'Protein food' },
+  vegetables: { id: 'Sayur', en: 'Vegetables' },
+  fruit: { id: 'Buah', en: 'Fruit' },
+};
+
+export function NutritionPanel({ evidence, onOpen, lang }: { evidence: DailyEvidence; onOpen: () => void; lang: Language }) {
   const id = lang === 'id';
   return (
     <section className="anime-panel h-full overflow-hidden">
       <div className="blender-bar flex items-center justify-between gap-2 px-3 py-2">
         <h2 className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-slate-700">
-          <Utensils className="size-3.5 text-emerald-700" /> {id ? 'GIZI & PEMULIHAN' : 'NUTRITION & RECOVERY'}
+          <Utensils className="size-3.5 text-emerald-700" /> {id ? 'CATATAN MAKAN' : 'MEAL JOURNAL'}
         </h2>
-        <button type="button" onClick={onOpen} className={BUTTON}>{id ? 'Isi catatan' : 'Log today'}</button>
+        <button type="button" onClick={onOpen} className={BUTTON}>{id ? 'Catat makan' : 'Log a meal'}</button>
       </div>
-      <div className="space-y-4 p-4">
-        <p className="text-xs leading-relaxed text-slate-600">{id ? 'Mulai dari satu kali makan. Gunakan panduan Isi Piringku untuk menyusun porsi.' : 'Start with one meal. Use the plate guide to plan your portions.'}</p>
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="rounded border border-emerald-200 bg-emerald-50 p-3">
-            <p className="font-bold text-emerald-950">{id ? '½ sayur & buah' : '½ vegetables & fruit'}</p>
-            <p className="mt-1 text-emerald-900">{id ? 'Contoh: bayam dan pepaya.' : 'For example, spinach and papaya.'}</p>
-          </div>
-          <div className="rounded border border-amber-200 bg-amber-50 p-3">
-            <p className="font-bold text-amber-950">{id ? '½ makanan pokok & lauk' : '½ staple & protein'}</p>
-            <p className="mt-1 text-amber-900">{id ? 'Contoh: nasi dan tempe atau telur.' : 'For example, rice with tempeh or eggs.'}</p>
-          </div>
-        </div>
-        <dl className="space-y-2 text-xs text-slate-700">
-          <div><dt className="font-bold">{id ? 'Pola makan hari ini' : 'Meals today'}</dt><dd>{evidence.meal ? MEALS[evidence.meal][lang] : evidence.mealNote || MEALS[''][lang]}</dd>{evidence.meal && evidence.mealNote && <dd className="whitespace-pre-wrap break-words">{evidence.mealNote}</dd>}</div>
-          <div><dt className="font-bold">{id ? 'Tidur terakhir' : 'Last night’s sleep'}</dt><dd>{evidence.sleep === null ? (id ? 'Belum dicatat' : 'Not logged') : `${evidence.sleep} ${id ? 'jam' : 'hours'}`}</dd></div>
-        </dl>
-        <div className="flex flex-wrap items-center gap-3">
-          <a className="text-xs font-bold text-sky-700 underline" href="https://ayosehat.kemkes.go.id/isi-piringku-kebutuhan-gizi-harian-seimbang" target="_blank" rel="noreferrer">
-            {id ? 'Panduan Isi Piringku · Kemenkes RI' : 'Plate guide · Indonesian Ministry of Health'}
-          </a>
-          <button type="button" className="text-xs text-slate-700 underline" onClick={onEditProfile}>{tr(lang, 'btnEditBio')}</button>
-        </div>
+      <div className="space-y-3 p-4">
+        <p className="rounded border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-950">{evidence.mealNote
+          ? (id ? 'Gimana makanannya tadi? Kalau mau, tambahkan foto dan pilih kelompok makanan yang kamu makan.' : 'How was your meal? You can add a photo and select what you ate.')
+          : (id ? 'Jangan lupa luangkan waktu untuk makan. Sudah makan apa hari ini? Cerita rasanya juga, kalau mau.' : 'Make time to eat. What have you had today? You can note how it tasted, too.')}</p>
+        {evidence.mealNote && <p className="break-words text-xs text-slate-700">{evidence.mealNote}</p>}
+        {evidence.mealEnjoyment && <p className="text-xs text-slate-600">{evidence.mealEnjoyment === 'enjoyed'
+          ? (id ? 'Rasanya enak' : 'Enjoyed it') : evidence.mealEnjoyment === 'did_not_enjoy'
+            ? (id ? 'Kurang suka rasanya' : 'Did not enjoy it') : (id ? 'Rasanya biasa saja' : 'Taste was okay')}</p>}
+        {evidence.mealGroups.length > 0 && <div className="flex flex-wrap gap-1">{evidence.mealGroups.map((group) =>
+          <span key={group} className="rounded bg-slate-100 px-1.5 py-1 text-[11px] text-slate-700">{mealGroupLabels[group]?.[lang]}</span>)}</div>}
+        <p className="text-xs text-slate-600">{id ? 'Tidur semalam' : 'Last night’s sleep'} · {evidence.sleep === null
+          ? (id ? 'Belum dicatat' : 'Not logged') : `${evidence.sleep} ${id ? 'jam' : 'hours'}`}</p>
       </div>
     </section>
   );
@@ -95,26 +93,9 @@ export function BodyConditionPanel({ owner, evidence, phase, lang, coreCharge, o
     setBusy(true);
     setPhotoError(false);
     try {
-      if (source.size > 20 * 1024 * 1024 || (source.type && !source.type.startsWith('image/'))) throw new Error('Photo format');
-      const localUrl = URL.createObjectURL(source);
-      try {
-        const image = new Image();
-        image.src = localUrl;
-        await image.decode();
-        const scale = Math.min(1, 900 / Math.max(image.naturalWidth, image.naturalHeight));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-        const context = canvas.getContext('2d');
-        if (!context) throw new Error('Canvas unavailable');
-        context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        const photo = await new Promise<Blob>((resolve, reject) =>
-          canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Photo encoding')), 'image/jpeg', 0.88));
-        await saveAvatarPhoto(owner, photo);
-        setPortrait(photo);
-      } finally {
-        URL.revokeObjectURL(localUrl);
-      }
+      const photo = await imageForLocalJournal(source);
+      await saveAvatarPhoto(owner, photo);
+      setPortrait(photo);
     } catch {
       setPhotoError(true);
     } finally {
@@ -188,14 +169,32 @@ export function BodyConditionPanel({ owner, evidence, phase, lang, coreCharge, o
   );
 }
 
-export function DailyCheckInModal({ name, phase, lang, evidence, initial, onSave, onClose }: {
-  name: string; phase: DayPhase; lang: Language; evidence: DailyEvidence; initial?: CheckInInput;
+export function DailyCheckInModal({ name, phase, lang, evidence, initial, photoKey, onSave, onClose }: {
+  name: string; phase: DayPhase; lang: Language; evidence: DailyEvidence; initial?: CheckInInput; photoKey: string;
   onSave: (input: CheckInInput) => void; onClose: () => void;
 }) {
   const id = lang === 'id';
   const [sleep, setSleep] = useState(String(initial?.sleepHours ?? evidence.sleep ?? ''));
   const [meal, setMeal] = useState(initial?.meal ?? evidence.meal);
   const [mealNote, setMealNote] = useState(initial?.mealNote ?? evidence.mealNote);
+  const [mealEnjoyment, setMealEnjoyment] = useState<NonNullable<CheckInInput['mealEnjoyment']>>(initial?.mealEnjoyment || '');
+  const [mealGroups, setMealGroups] = useState<string[]>(initial?.mealGroups || evidence.mealGroups);
+  const [mealPhoto, setMealPhoto] = useState('');
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [mealPhotoError, setMealPhotoError] = useState(false);
+  const [storedPhoto, setStoredPhoto] = useState<Blob>();
+  useEffect(() => {
+    let active = true;
+    void loadAvatarPhoto(photoKey).then((value) => { if (active) setStoredPhoto(value); }).catch(() => {});
+    return () => { active = false; };
+  }, [photoKey]);
+  useEffect(() => {
+    if (!storedPhoto) { setMealPhoto(''); return; }
+    const url = URL.createObjectURL(storedPhoto);
+    setMealPhoto(url);
+    return () => URL.revokeObjectURL(url);
+  }, [storedPhoto]);
+
   const [energy, setEnergy] = useState(initial?.energy ?? evidence.energy);
   const [note, setNote] = useState(initial?.note ?? '');
   const [minutes, setMinutes] = useState(String(initial?.extraMinutes ?? ''));
@@ -208,7 +207,7 @@ export function DailyCheckInModal({ name, phase, lang, evidence, initial, onSave
     <ModalShell title={title} icon={<ClipboardList className="size-4 text-sky-700" />} onClose={onClose}>
       <form className="space-y-3" onSubmit={(event) => {
         event.preventDefault();
-        onSave({ sleepHours: sleep === '' ? null : Number(sleep), meal, mealNote: mealNote.trim(), energy, note: note.trim(), extraMinutes: phase === 'morning' ? 0 : Number(minutes) || 0 });
+        onSave({ sleepHours: sleep === '' ? null : Number(sleep), meal, mealNote: mealNote.trim(), mealEnjoyment, mealGroups, energy, note: note.trim(), extraMinutes: phase === 'morning' ? 0 : Number(minutes) || 0 });
       }}>
         <p className="text-sm text-slate-700">{prompt}</p>
         {phase !== 'morning' && (
@@ -239,6 +238,36 @@ export function DailyCheckInModal({ name, phase, lang, evidence, initial, onSave
         <label className="block space-y-1 text-xs font-semibold">{id ? 'Yang kamu makan (opsional)' : 'What you ate (optional)'}
           <input value={mealNote} maxLength={300} onChange={(event) => setMealNote(event.target.value)} className={INPUT} placeholder={id ? 'Misalnya nasi, ikan, dan sayur' : 'For example rice, fish, and vegetables'} />
         </label>
+        <fieldset className="space-y-2 rounded border border-slate-200 p-2.5 text-xs">
+          <legend className="px-1 font-semibold">{id ? 'Bagaimana makannya?' : 'How was your meal?'}</legend>
+          <label className="block space-y-1"><span>{id ? 'Gimana rasanya?' : 'How did it taste?'}</span>
+            <select className={INPUT} value={mealEnjoyment} onChange={(e) => setMealEnjoyment(e.target.value as NonNullable<CheckInInput['mealEnjoyment']>)}>
+              <option value="">{id ? 'Lewati' : 'Skip'}</option><option value="enjoyed">{id ? 'Enak' : 'Enjoyed it'}</option><option value="neutral">{id ? 'Biasa saja' : 'Okay'}</option><option value="did_not_enjoy">{id ? 'Kurang suka' : 'Did not enjoy it'}</option>
+            </select>
+          </label>
+          <p>{id ? 'Pilih kelompok makanan yang kamu makan.' : 'Select the groups you ate.'}</p>
+          <div className="flex flex-wrap gap-2">{Object.entries(mealGroupLabels).map(([group, label]) => <label key={group} className="flex items-center gap-1">
+            <input type="checkbox" checked={mealGroups.includes(group)} onChange={(e) => setMealGroups((list) => e.target.checked ? [...list, group] : list.filter((item) => item !== group))} />{label[lang]}
+          </label>)}</div>
+          {mealPhoto && <img className="max-h-32 rounded object-contain" src={mealPhoto} alt={id ? 'Foto makanan' : 'Meal photo'} />}
+          <div className="flex flex-wrap items-center gap-2">
+            <label className={BUTTON + ' cursor-pointer'}>{id ? 'Tambahkan foto makanan' : 'Add meal photo'}
+              <input type="file" accept="image/*" className="sr-only" disabled={photoBusy} onChange={(e) => {
+                const file = e.currentTarget.files?.[0]; e.currentTarget.value = '';
+                if (!file) return;
+                setPhotoBusy(true); setMealPhotoError(false);
+                void imageForLocalJournal(file).then(async (photo) => { await saveAvatarPhoto(photoKey, photo); setStoredPhoto(photo); })
+                  .catch(() => setMealPhotoError(true)).finally(() => setPhotoBusy(false));
+              }} />
+            </label>
+            {mealPhoto && <button type="button" className="underline" disabled={photoBusy} onClick={() => {
+              setPhotoBusy(true);
+              void deleteAvatarPhoto(photoKey).then(() => setStoredPhoto(undefined)).catch(() => setMealPhotoError(true)).finally(() => setPhotoBusy(false));
+            }}>{id ? 'Hapus foto makanan' : 'Remove meal photo'}</button>}
+          </div>
+          <p className="text-slate-600">{id ? 'Foto disimpan di perangkat. Kelompok gizi dicatat sesuai pilihanmu.' : 'Photos stay on this device. Nutrition groups are saved from your selection.'}</p>
+          {mealPhotoError && <p role="alert" className="text-red-700">{id ? 'Foto belum bisa disimpan.' : 'The photo could not be saved.'}</p>}
+        </fieldset>
         <label className="block space-y-1 text-xs font-semibold">
           {phase === 'morning' ? (id ? 'Rencana hari ini' : 'Today’s plan') : (id ? 'Aktivitas tambahan di check-in ini' : 'Extra activities in this check-in')}
           <textarea rows={3} maxLength={1500} value={note} onChange={(event) => setNote(event.target.value)} className={INPUT} placeholder={id ? 'Tulis satu aktivitas per baris' : 'One activity per line'} />

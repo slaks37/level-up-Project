@@ -42,6 +42,34 @@ export interface CareerStage {
   minLvl: number;
 }
 
+export interface WorkoutTarget {
+  sets: number;
+  reps: number;
+}
+export interface WorkoutFeedback {
+  fatigue: 'manageable' | 'tired' | 'very_tired';
+  pain: boolean;
+  setReps: string;
+}
+export interface CareerProfile {
+  industry: string;
+  responsibilities: string;
+  managesTeam: boolean;
+  usesSprints: boolean;
+  project: string;
+  projectStatus: 'planning' | 'in_progress' | 'blocked' | 'done';
+  lastMeeting: string;
+  nextAction: string;
+}
+export interface GymProfile {
+  goal: 'strength' | 'endurance' | 'general';
+  level: 'beginner' | 'regular';
+  equipment: 'home' | 'gym';
+  days: number;
+  limitations: string;
+  currentPain: boolean;
+}
+
 export interface Quest {
   id: string;
   title: string;
@@ -56,6 +84,7 @@ export interface Quest {
   completed: boolean;
   completedQty?: number;
   completedRpe?: number;
+  workout?: WorkoutTarget;
 }
 
 export interface DreamStep {
@@ -63,6 +92,8 @@ export interface DreamStep {
   phase: string;
   title: string;
   coachTip: string;
+  actions?: string[];
+  completedActions?: string[];
   targetLevel: number;
   studyMinutes: number;
   workMinutes: number;
@@ -135,6 +166,8 @@ export interface PlayerProfile {
   rewardInterest: string;
   bio: Biometrics;
   profession: string;
+  career?: CareerProfile;
+  gym?: GymProfile;
   classTitle: string;
   goal: string;
   targetLevel: number;

@@ -164,10 +164,22 @@ service cloud.firestore {
         request.auth.token.email_verified == true;
     }
 
+    function hasVerifiedEmail() {
+      return isAuthenticated() && request.auth.token.get('email_verified', false) == true &&
+        request.auth.token.get('email', '') is string && request.auth.token.get('email', '').size() > 0;
+    }
+
     function isAdmin() {
-      return isBootstrapAdmin() ||
-        (isAuthenticated() &&
-         exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+      return isBootstrapAdmin() || (hasVerifiedEmail() && (
+        exists(/databases/$(database)/documents/adminEmails/$(request.auth.token.email.lower())) ||
+        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.email.lower() == request.auth.token.email.lower())
+      ));
+    }
+
+    function isAIProxy() {
+      return isAuthenticated() && request.auth.uid == 'levelup-ai-proxy-v1' &&
+        request.auth.token.get('levelUpProxy', false) == true;
     }
 
     function uidUnchanged(userId) {
@@ -374,6 +386,28 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidCareer(data) {
+      return data is map &&
+        data.keys().hasOnly(['industry','responsibilities','managesTeam','usesSprints','project','projectStatus','lastMeeting','nextAction']) &&
+        isValidString(data.industry, 0, 100) && isValidString(data.responsibilities, 0, 500) &&
+        data.managesTeam is bool && data.usesSprints is bool &&
+        isValidString(data.project, 0, 120) && data.projectStatus in ['planning','in_progress','blocked','done'] &&
+        isValidString(data.lastMeeting, 0, 300) && isValidString(data.nextAction, 0, 140);
+    }
+
+    function isValidGym(data) {
+      return data is map && data.keys().hasOnly(['goal','level','equipment','days','limitations','currentPain']) &&
+        data.goal in ['strength','endurance','general'] && data.level in ['beginner','regular'] &&
+        data.equipment in ['home','gym'] && isIntInRange(data.days,1,5) &&
+        isValidString(data.limitations,0,300) && data.currentPain is bool;
+    }
+
+    function isValidWorkout(data) {
+      return data is map && data.keys().hasOnly(['fatigue', 'pain', 'setReps']) &&
+        data.fatigue in ['manageable','tired','very_tired'] && data.pain is bool &&
+        isValidString(data.setReps,0,40) && data.setReps.matches('[0-9,]*');
+    }
+
     function isValidProfile(data, userId) {
       let allowedFields = [
         'ownerUid', 'schemaVersion', 'updatedAt',
@@ -387,8 +421,10 @@ service cloud.firestore {
         'dreamSteps', 'rewards', 'discoveredPerks',
         'growthNews', 'groundingSources', 'boss'
       ];
-      return hasOnlyAllowedFields(allowedFields) &&
+      return hasOnlyAllowedFields(allowedFields.concat(['career', 'gym'])) &&
         hasRequiredFields(allowedFields) &&
+        (!('career' in data) || isValidCareer(data.career)) &&
+        (!('gym' in data) || isValidGym(data.gym)) &&
         data.ownerUid is string && data.ownerUid == userId &&
         isIntInRange(data.schemaVersion, 1, 20) &&
         data.updatedAt is timestamp &&
@@ -436,21 +472,25 @@ service cloud.firestore {
         data.updatedAt is int && data.updatedAt >= 0 &&
         (
           (data.kind == 'checkin' &&
-            data.keys().hasOnly(base.concat(checkIn)) && data.keys().hasAll(base.concat(checkIn)) &&
+            data.keys().hasOnly(base.concat(checkIn).concat(['mealEnjoyment', 'mealGroups'])) && data.keys().hasAll(base.concat(checkIn)) &&
             data.phase in ['morning', 'day', 'evening'] && entryId == data.dateKey + '-' + data.phase &&
             (data.sleepHours == null || isNumberInRange(data.sleepHours, 0, 24)) &&
             data.meal in ['', 'skipped', 'partial', 'varied'] &&
             data.mealNote is string && data.mealNote.size() <= 300 &&
+            (!('mealEnjoyment' in data) || data.mealEnjoyment in ['', 'enjoyed', 'neutral', 'did_not_enjoy']) &&
+            (!('mealGroups' in data) || (data.mealGroups is list && data.mealGroups.size() <= 4 &&
+              data.mealGroups.hasOnly(['staple','protein','vegetables','fruit']))) &&
             data.energy in ['', 'fresh', 'steady', 'tired'] &&
             data.note is string && data.note.size() <= 1500 &&
             isIntInRange(data.extraMinutes, 0, 1440)
           ) ||
           (data.kind == 'activity' &&
-            data.keys().hasOnly(base.concat(activity)) && data.keys().hasAll(base.concat(activity)) &&
+            data.keys().hasOnly(base.concat(activity).concat(['workout'])) && data.keys().hasAll(base.concat(activity)) &&
             entryId.matches(data.dateKey + '-task-.+') &&
             data.title is string && data.title.size() > 0 && data.title.size() <= 140 &&
             isIntInRange(data.minutes, 0, 1440) &&
-            data.category in ['CAREER', 'STUDY', 'FITNESS'])
+            data.category in ['CAREER', 'STUDY', 'FITNESS'] &&
+            (!('workout' in data) || (data.category == 'FITNESS' && isValidWorkout(data.workout))))
         );
     }
 
@@ -491,6 +531,18 @@ service cloud.firestore {
       allow delete: if isAdmin() && uid != request.auth.uid;
     }
 
+    match /adminEmails/{email} {
+      allow get: if isAdmin() || (hasVerifiedEmail() && request.auth.token.email.lower() == email);
+      allow list: if isAdmin();
+      allow create: if isAdmin() &&
+        request.resource.data.keys().hasOnly(['email', 'grantedBy', 'createdAt']) &&
+        request.resource.data.email == email && isNonEmptyString(email, 254) &&
+        email == email.lower() && email.matches('[^@ ]+@[^@ ]+[.][^@ ]+') &&
+        request.resource.data.grantedBy == request.auth.uid && request.resource.data.createdAt == request.time;
+      allow delete: if isAdmin() && request.auth.token.email.lower() != email;
+      allow update: if false;
+    }
+
     // Non-secret public AI configuration (strictly no API keys)
     match /appConfig/{docId} {
       allow get: if isAuthenticated() && docId == 'aiPublic';
@@ -503,7 +555,7 @@ service cloud.firestore {
 
     // Admin-only AI provider API key vault (never readable by regular users)
     match /adminSecrets/{docId} {
-      allow get: if isAdmin() && docId == 'aiProvider';
+      allow get: if (isAdmin() || isAIProxy()) && docId == 'aiProvider';
       allow create, update: if isAdmin() &&
         docId == 'aiProvider' &&
         isValidAiSecretConfig(request.resource.data);
@@ -512,7 +564,7 @@ service cloud.firestore {
 
     // User Account Directory (self-service metadata + admin user management)
     match /users/{userId} {
-      allow get: if isOwner(userId) || isAdmin();
+      allow get: if isOwner(userId) || isAdmin() || isAIProxy();
       allow list: if isAdmin();
       allow create: if isOwner(userId) &&
         uidUnchanged(userId) &&
@@ -536,6 +588,9 @@ service cloud.firestore {
           request.resource.data.aiTotalRequests == resource.data.get('aiTotalRequests', 0) &&
           request.resource.data.aiQuotaDate == resource.data.get('aiQuotaDate', '')
         ));
+      allow update: if isAIProxy() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['aiRequestsToday', 'aiTotalRequests', 'aiQuotaDate']) &&
+        isValidUserAccount(request.resource.data, userId);
       allow delete: if isOwner(userId) || isAdmin();
 
       // Main player profile document (strictly owner-only, docId == 'main', no API keys)
@@ -580,7 +635,16 @@ service cloud.firestore {
     // Server-written AI usage audit logs (admin read-only)
     match /aiUsageLogs/{logId} {
       allow get, list: if isAdmin();
-      allow create, update, delete: if false;
+      allow create: if isAIProxy() &&
+        request.resource.data.keys().hasOnly(['uid', 'email', 'feature', 'model', 'status', 'latencyMs', 'createdAt']) &&
+        isNonEmptyString(request.resource.data.uid, 128) &&
+        isValidString(request.resource.data.email, 0, 150) &&
+        isValidString(request.resource.data.feature, 0, 32) &&
+        isNonEmptyString(request.resource.data.model, 80) &&
+        request.resource.data.status in ['ok', 'error'] &&
+        isIntInRange(request.resource.data.latencyMs, 0, 60000) &&
+        request.resource.data.createdAt is timestamp;
+      allow update, delete: if false;
     }
 
     // Default deny all other paths and subcollections

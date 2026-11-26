@@ -3,6 +3,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithCredential,
   signInWithRedirect,
   getRedirectResult,
   signInWithEmailAndPassword,
@@ -24,6 +25,8 @@ import {
   setDoc,
   updateDoc,
   getDoc,
+  getDocFromServer,
+  writeBatch,
   deleteDoc,
   onSnapshot,
   collection,
@@ -48,6 +51,7 @@ import type {
 import { normalizePlayerProfile, PLAYER_SCHEMA_VERSION } from '../engine/science';
 import { loadRuntimeFirebaseConfig } from './storageService';
 import type { JournalEntry } from '../engine/journal';
+import { requestGoogleToken } from './googleCalendar';
 
 export const BOOTSTRAP_ADMIN_EMAIL = (
   import.meta.env.VITE_ADMIN_EMAIL || 'stefenlaksana.sl@gmail.com'
@@ -201,29 +205,77 @@ export async function checkIsUserAdmin(user: User | null): Promise<{
   isAdmin: boolean;
   isUnverifiedBootstrapAdmin: boolean;
 }> {
-  if (!user) return { isAdmin: false, isUnverifiedBootstrapAdmin: false };
-  const emailLower = (user.email || '').trim().toLowerCase();
-  const isBootstrapEmail = Boolean(emailLower && emailLower === BOOTSTRAP_ADMIN_EMAIL);
+  const email = user?.email?.trim().toLowerCase() || '';
+  const isUnverifiedBootstrapAdmin = Boolean(email && email === BOOTSTRAP_ADMIN_EMAIL && !user?.emailVerified);
+  if (!user?.emailVerified || !email) return { isAdmin: false, isUnverifiedBootstrapAdmin };
+  if (email === BOOTSTRAP_ADMIN_EMAIL) return { isAdmin: true, isUnverifiedBootstrapAdmin: false };
+  if (!firestoreDb) return { isAdmin: false, isUnverifiedBootstrapAdmin: false };
+  const database = firestoreDb;
+  const [grant, invitation] = await Promise.all([
+    getDocFromServer(doc(database, 'admins', user.uid)).catch(() => null),
+    getDocFromServer(doc(database, 'adminEmails', email)).catch(() => null),
+  ]);
+  return { isAdmin: Boolean(invitation?.exists() || (grant?.exists() && String(grant.data().email).toLowerCase() === email)),
+    isUnverifiedBootstrapAdmin: false };
+}
 
-  if (isBootstrapEmail && user.emailVerified) {
-    return { isAdmin: true, isUnverifiedBootstrapAdmin: false };
+export async function requireAdminSession(user: User): Promise<User> {
+  const access = await checkIsUserAdmin(user);
+  if (!access.isAdmin && !access.isUnverifiedBootstrapAdmin) {
+    if (firebaseAuth?.currentUser?.uid === user.uid) await signOut(firebaseAuth);
+    throw new Error('ADMIN_ACCESS_REQUIRED');
   }
+  return user;
+}
 
-  if (firestoreDb) {
-    try {
-      const snap = await getDoc(doc(firestoreDb, 'admins', user.uid));
-      if (snap.exists()) {
-        return { isAdmin: true, isUnverifiedBootstrapAdmin: false };
-      }
-    } catch {
-      // ignore permission/offline errors
-    }
+export async function signInExistingAdminWithGoogle(): Promise<User> {
+  if (!firebaseAuth || !firebaseApp) throw new Error('Firebase belum siap.');
+  const auth = firebaseAuth;
+  const apiKey = firebaseApp.options.apiKey;
+  const projectId = firebaseApp.options.projectId;
+  const accessToken = await requestGoogleToken('openid email profile');
+  const response = await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=' + encodeURIComponent(apiKey || ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ autoCreate: false, returnSecureToken: true, requestUri: location.origin,
+      postBody: new URLSearchParams({ access_token: accessToken, providerId: 'google.com' }).toString() }),
+  });
+  const result = await response.json();
+  if (!response.ok || result.isNewUser || !result.emailVerified || !result.localId || !result.idToken) throw new Error('ADMIN_ACCESS_REQUIRED');
+  const email = String(result.email || '').trim().toLowerCase();
+  if (!email) throw new Error('ADMIN_ACCESS_REQUIRED');
+  if (email !== BOOTSTRAP_ADMIN_EMAIL) {
+    const documents = 'https://firestore.googleapis.com/v1/projects/' + projectId + '/databases/(default)/documents/';
+    const headers = { Authorization: 'Bearer ' + result.idToken };
+    const [invitation, grant] = await Promise.all([
+      fetch(documents + 'adminEmails/' + encodeURIComponent(email), { headers }),
+      fetch(documents + 'admins/' + encodeURIComponent(result.localId), { headers }),
+    ]);
+    const legacy = grant.ok ? await grant.json() : null;
+    if (!invitation.ok && legacy?.fields?.email?.stringValue?.toLowerCase() !== email) throw new Error('ADMIN_ACCESS_REQUIRED');
   }
+  const credential = await signInWithCredential(auth, GoogleAuthProvider.credential(null, accessToken));
+  return requireAdminSession(credential.user);
+}
 
-  return {
-    isAdmin: false,
-    isUnverifiedBootstrapAdmin: isBootstrapEmail && !user.emailVerified,
-  };
+export async function fetchAdminEmails(): Promise<string[]> {
+  if (!firestoreDb) return [];
+  const snapshot = await getDocs(collection(firestoreDb, 'adminEmails'));
+  return snapshot.docs.map((entry) => entry.id).sort();
+}
+
+export async function addAdminEmail(actor: User, value: string): Promise<string> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  const email = value.trim().toLowerCase();
+  if (!/^[^@\s/]+@[^@\s/]+\.[^@\s/]+$/.test(email) || email.length > 254) throw new Error('Email tidak valid.');
+  if (email === BOOTSTRAP_ADMIN_EMAIL) return email;
+  const ref = doc(firestoreDb, 'adminEmails', email);
+  if (!(await getDocFromServer(ref)).exists()) await setDoc(ref, { email, grantedBy: actor.uid, createdAt: serverTimestamp() });
+  return email;
+}
+
+export async function revokeAdminEmail(email: string): Promise<void> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  await deleteDoc(doc(firestoreDb, 'adminEmails', email));
 }
 
 export async function upsertUserMeta(
@@ -340,29 +392,36 @@ export async function saveAdminSharedAIConfig(
   }
 ): Promise<void> {
   if (!firestoreDb) throw new Error('Firestore belum siap.');
+  const database = firestoreDb;
+  const url = new URL(payload.baseUrl.trim());
+  if (url.origin !== 'https://apihub.agnes-ai.com' || url.username || url.password || url.hash || url.search) {
+    throw new Error('Gunakan URL HTTPS resmi Agnes AI.');
+  }
   const updatedBy = (adminUser.email || adminUser.uid).slice(0, 128);
   const cleanLimit = Math.max(0, Math.min(500, Math.round(payload.dailyLimit)));
-
-  await setDoc(doc(firestoreDb, 'adminSecrets', 'aiProvider'), {
-    baseUrl: payload.baseUrl.trim().slice(0, 300),
+  const secretRef = doc(database, 'adminSecrets', 'aiProvider');
+  const savedKey = payload.apiKey.trim() || (await getDocFromServer(secretRef)).data()?.apiKey || '';
+  const batch = writeBatch(database);
+  batch.set(secretRef, {
+    baseUrl: url.toString().slice(0, 300),
     model: payload.model.trim().slice(0, 80),
-    apiKey: payload.apiKey.trim().slice(0, 500),
+    apiKey: savedKey.slice(0, 500),
     enabled: Boolean(payload.enabled),
     dailyLimit: cleanLimit,
     updatedAt: serverTimestamp(),
     updatedBy,
   });
-
-  await setDoc(doc(firestoreDb, 'appConfig', 'aiPublic'), {
+  batch.set(doc(database, 'appConfig', 'aiPublic'), {
     enabled: Boolean(payload.enabled),
     providerName: 'Agnes AI',
     model: payload.model.trim().slice(0, 80),
     dailyLimit: cleanLimit,
-    proxyConfigured: Boolean(payload.apiKey.trim()),
+    proxyConfigured: Boolean(savedKey),
     maintenanceNotice: payload.maintenanceNotice.trim().slice(0, 300),
     updatedAt: serverTimestamp(),
     updatedBy,
   });
+  await batch.commit();
 }
 
 export async function fetchAllUsersForAdmin(): Promise<UserAccountRecord[]> {
@@ -413,21 +472,20 @@ export async function grantOrRevokeAdmin(
   const adminRef = doc(firestoreDb, 'admins', target.ownerUid);
   const userRef = doc(firestoreDb, 'users', target.ownerUid);
 
+  const email = target.email.trim().toLowerCase();
+  if (!email || email === BOOTSTRAP_ADMIN_EMAIL) throw new Error('Email admin utama tidak dapat diubah di sini.');
+  const batch = writeBatch(firestoreDb);
   if (makeAdmin) {
-    await setDoc(adminRef, {
-      uid: target.ownerUid,
-      email: target.email || target.displayName,
-      grantedBy: (actingAdmin.email || actingAdmin.uid).slice(0, 128),
-      createdAt: serverTimestamp(),
-    });
+    const invitation = doc(firestoreDb, 'adminEmails', email);
+    if (!(await getDocFromServer(invitation)).exists()) {
+      batch.set(invitation, { email, grantedBy: actingAdmin.uid, createdAt: serverTimestamp() });
+    }
   } else {
-    await deleteDoc(adminRef);
+    batch.delete(adminRef);
+    batch.delete(doc(firestoreDb, 'adminEmails', email));
   }
-
-  await updateDoc(userRef, {
-    role: makeAdmin ? 'admin' : 'user',
-    updatedAt: serverTimestamp(),
-  });
+  batch.update(userRef, { role: makeAdmin ? 'admin' : 'user', updatedAt: serverTimestamp() });
+  await batch.commit();
 }
 
 export async function fetchAdminUsageLogs(maxCount = 40): Promise<AIUsageLogRecord[]> {
@@ -492,6 +550,8 @@ function sanitizeProfileForFirestore(uid: string, player: PlayerProfile) {
       bmr: Number(player.bio.bmr) || 1600,
       proteinTarget: Number(player.bio.proteinTarget) || 100,
     },
+    ...(player.career ? { career: stripUndefined(player.career) } : {}),
+    ...(player.gym ? { gym: stripUndefined(player.gym) } : {}),
     profession: (player.profession || 'Entrepreneur').slice(0, 160),
     classTitle: (player.classTitle || 'Awakened Vanguard').slice(0, 120),
     goal: (player.goal || 'Level Up').slice(0, 300),

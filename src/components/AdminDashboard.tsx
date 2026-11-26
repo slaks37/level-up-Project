@@ -28,6 +28,9 @@ import type {
   UserAccountRecord,
 } from '../types';
 import {
+  addAdminEmail,
+  fetchAdminEmails,
+  revokeAdminEmail,
   fetchAdminAISecret,
   fetchAdminUsageLogs,
   fetchAllUsersForAdmin,
@@ -44,8 +47,6 @@ import {
   checkProxyServerHealth,
   fetchProxyAdminConfig,
   fetchProxyUsageLogs,
-  saveProxyAdminConfig,
-  testAIConnection,
   testProxyAdminAI,
   type ProxyHealthResponse,
 } from '../services/aiService';
@@ -90,6 +91,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Users & Logs state
   const [users, setUsers] = useState<UserAccountRecord[]>([]);
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminEmails, setAdminEmails] = useState<string[]>([]);
+  const [savingAccess, setSavingAccess] = useState(false);
+  const changeAdminEmail = async (email: string, add: boolean) => {
+    if (!cloudUser || !isAdmin || savingAccess) return;
+    setSavingAccess(true);
+    try {
+      if (add) {
+        await addAdminEmail(cloudUser, email);
+        setAdminEmail('');
+      } else await revokeAdminEmail(email);
+      setAdminEmails(await fetchAdminEmails());
+      onNotify(lang === 'id' ? 'Akses admin diperbarui.' : 'Admin access updated.', 'success');
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setSavingAccess(false);
+    }
+  };
+  useEffect(() => {
+    if (!isAdmin || !cloudUser) return;
+    let active = true;
+    void fetchAdminEmails().then((emails) => { if (active) setAdminEmails(emails); }).catch(() => {});
+    return () => { active = false; };
+  }, [cloudUser, isAdmin]);
   const [userSearch, setUserSearch] = useState('');
   const [usageLogs, setUsageLogs] = useState<AIUsageLogRecord[]>([]);
   const [publicCfg, setPublicCfg] = useState<SharedAIPublicConfig | null>(null);
@@ -195,35 +221,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         maintenanceNotice: maintenanceNotice.trim(),
       });
 
-      // 2. Push to live Proxy Server if reachable
-      let syncedToProxy = false;
-      try {
-        const idToken = await cloudUser.getIdToken();
-        const res = await saveProxyAdminConfig(localProxyUrl.trim(), idToken, {
-          baseUrl: cleanBase,
-          model: cleanModel,
-          apiKey: cleanKey || undefined,
-          enabled,
-          dailyLimit,
-          maintenanceNotice: maintenanceNotice.trim(),
-        });
-        if (res.ok) {
-          syncedToProxy = true;
-          if (res.apiKeyMasked) setMaskedServerKey(res.apiKeyMasked);
-        }
-      } catch {
-        syncedToProxy = false;
-      }
-
+      const health = await checkProxyServerHealth(localProxyUrl.trim());
       onNotify(
-        syncedToProxy
-          ? lang === 'id'
-            ? 'Konfigurasi Shared Agnes AI tersimpan ke Database Firestore & Server Proxy! Semua user langsung bisa pakai.'
-            : 'Shared Agnes AI saved to Firestore & Proxy Server! All users can use it now.'
-          : lang === 'id'
-            ? 'Tersimpan ke Firestore (adminSecrets & appConfig). Jalankan server proxy (`npm run dev:server`) agar semua user bisa memakai API key secara aman.'
-            : 'Saved to Firestore. Start or connect your Proxy Server so users can access shared AI securely.',
-        syncedToProxy ? 'success' : 'warning'
+        health?.sharedAiConfigured
+          ? (lang === 'id' ? 'Tersimpan. Proxy produksi membaca pengaturan Agnes dari Firestore.' : 'Saved. The production proxy reads Agnes settings from Firestore.')
+          : (lang === 'id' ? 'Pengaturan tersimpan. Proxy Agnes belum terhubung.' : 'Settings saved. The Agnes proxy is unavailable.'),
+        health?.sharedAiConfigured ? 'success' : 'warning',
       );
       await loadAdminData();
     } catch (err) {
@@ -239,11 +242,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setTestResult(null);
     try {
       const idToken = await cloudUser.getIdToken();
-      const res = await testProxyAdminAI(localProxyUrl.trim(), idToken, {
-        baseUrl: baseUrl.trim(),
-        model: model.trim(),
-        apiKey: apiKey.trim() || undefined,
-      });
+      const res = await testProxyAdminAI(localProxyUrl.trim(), idToken, {});
       if (res.ok) {
         setTestResult({
           ok: true,
@@ -255,36 +254,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           message: res.error || 'Server test failed',
         });
       }
-    } catch {
-      // Fallback: test Agnes AI directly if proxy server isn't deployed yet
-      if (apiKey.trim()) {
-        const direct = await testAIConnection({
-          baseUrl: baseUrl.trim() || 'https://apihub.agnes-ai.com/v1',
-          model: model.trim() || 'agnes-2.5-flash',
-          apiKey: apiKey.trim(),
-          useDevProxy: false,
-          preferSharedProxy: false,
-        });
-        if (direct.ok) {
-          setTestResult({
-            ok: true,
-            message: `${direct.reply || 'OK'} (${direct.latencyMs}ms • API Key Valid! Catatan: Proxy Server belum online di "${localProxyUrl || '/api'}")`,
-          });
-        } else {
-          setTestResult({
-            ok: false,
-            message: `Agnes AI error: ${direct.error}`,
-          });
-        }
-      } else {
-        setTestResult({
-          ok: false,
-          message:
-            lang === 'id'
-              ? `Proxy Server belum online di "${localProxyUrl || '/api'}". Masukkan API Key dulu atau jalankan: npm run dev:full`
-              : `Proxy server offline at "${localProxyUrl || '/api'}". Enter API Key or run: npm run dev:full`,
-        });
-      }
+    } catch (error) {
+      setTestResult({ ok: false, message: error instanceof Error ? error.message : 'Server test failed' });
     } finally {
       setTesting(false);
     }
@@ -563,6 +534,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Main Grid: Shared AI Config + Audit Logs */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        <section className="lg:col-span-12 anime-panel overflow-hidden">
+          <div className="blender-bar px-4 py-2 font-mono text-xs font-bold">{lang === 'id' ? 'EMAIL DENGAN AKSES ADMIN' : 'ADMIN EMAIL ACCESS'}</div>
+          <div className="space-y-2 p-4">
+            <p className="text-xs text-slate-600">{lang === 'id' ? 'Email yang ditambahkan harus punya akun Level Up dan sudah terverifikasi sebelum masuk.' : 'An invited email needs a verified Level Up account to sign in.'}</p>
+            <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); void changeAdminEmail(adminEmail, true); }}>
+              <input type="email" required maxLength={254} aria-label="Email admin" value={adminEmail} onChange={(event) => setAdminEmail(event.target.value)} className="min-w-0 rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="nama@contoh.com" />
+              <button type="submit" disabled={savingAccess} className="rounded bg-slate-900 px-3 py-1.5 text-xs font-bold text-white">{lang === 'id' ? 'Tambahkan email' : 'Add email'}</button>
+            </form>
+            {adminEmails.map((email) => <div key={email} className="flex items-center gap-2 text-xs"><span className="break-all">{email}</span>
+              {cloudUser?.email?.toLowerCase() !== email && <button type="button" disabled={savingAccess} onClick={() => void changeAdminEmail(email, false)} className="text-red-700 underline">{lang === 'id' ? 'Cabut akses' : 'Revoke access'}</button>}
+            </div>)}
+          </div>
+        </section>
+
         {/* LEFT: Shared Agnes AI Vault & Proxy Settings (7 cols) */}
         <div className="lg:col-span-7 anime-panel overflow-hidden">
           <div className="blender-bar px-4 py-2 flex items-center justify-between">
@@ -769,8 +754,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
                 <span>
                   {lang === 'id'
-                    ? 'SIMPAN KE DATABASE & SERVER'
-                    : 'SAVE TO DATABASE & SERVER'}
+                    ? 'SIMPAN PENGATURAN'
+                    : 'SAVE SETTINGS'}
                 </span>
               </button>
             </div>

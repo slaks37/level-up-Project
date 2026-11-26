@@ -29,7 +29,10 @@ export interface ProxyHealthResponse {
 }
 
 function buildProxyUrl(proxyBaseUrl: string | undefined, path: string): string {
-  const clean = (proxyBaseUrl || '').trim().replace(/\/+$/, '');
+  const configured = import.meta.env.VITE_AI_PROXY_URL?.trim() || '';
+  const given = (proxyBaseUrl || '').trim();
+  const base = !import.meta.env.DEV && (!given || /localhost|127\.0\.0\.1/.test(given)) ? configured : given;
+  const clean = base.replace(/\/+$/, '');
   if (!clean) return path; // uses same-origin /api/* (Vite dev proxy or Firebase Hosting rewrite)
   return `${clean}${path}`;
 }
@@ -359,7 +362,8 @@ export async function testAIConnection(config: AIConfig): Promise<{
 export async function generateAIDreamRoadmap(
   player: PlayerProfile,
   lang: Language,
-  config: AIConfig
+  config: AIConfig,
+  preserveMilestones = false
 ): Promise<{
   dreamSteps: DreamStep[];
   coachAdvice: string;
@@ -374,12 +378,14 @@ export async function generateAIDreamRoadmap(
     'You are an elite science-based career, study, and fitness coach for LEVEL UP SYSTEM. Always return valid JSON only with zero extra commentary.';
 
   const userPrompt = `Create a 5-stage progressive Dream Roadmap for this user:
-- Name: ${player.name}
 - Profession/Role: ${player.profession}
 - Main Dream Goal: "${player.goal}"
+- Company industry: "${player.career?.industry || 'not specified'}"
+- Current responsibilities: "${player.career?.responsibilities || 'not specified'}"
 - Current Level: ${player.level}, Target Level: ${player.targetLevel}
 - Daily Time Budget: ${bd.total} minutes/day (${bd.study}m Study, ${bd.work}m Work, ${bd.fitness}m Fitness)
 - Language: ${lang === 'id' ? 'Bahasa Indonesia' : 'English'}
+${preserveMilestones ? 'Keep these existing milestone titles exactly as written and suggest aligned actions: ' + JSON.stringify(player.dreamSteps.slice(0, 5).map((step) => step.title)) : ''}
 
 Return ONLY a valid JSON object matching this exact structure:
 {
@@ -391,11 +397,12 @@ Return ONLY a valid JSON object matching this exact structure:
       "coachTip": "Practical tip for completing this milestone",
       "targetLevel": 3,
       "targetMinutes": 240,
-      "skillName": "Short core skill name (2-4 words)"
+      "skillName": "Short core skill name (2-4 words)",
+      "actions": ["Four sequential, concrete 10–25 minute tasks with one observable output each. Write each as a separate JSON string."]
     }
   ]
 }
-Make sure there are exactly 5 steps whose targetLevel increases smoothly up to ${player.targetLevel}.`;
+Make exactly 5 milestones. Provide 4–6 ordered actions per milestone with a concrete deliverable. Start with the smallest action the user can do today. Never assume access to company systems or invent current events.`;
 
   try {
     const res = await callOpenAICompatible(config, systemPrompt, userPrompt, 0.65, 'roadmap');
@@ -408,10 +415,11 @@ Make sure there are exactly 5 steps whose targetLevel increases smoothly up to $
         targetLevel?: number;
         targetMinutes?: number;
         skillName?: string;
+        actions?: string[];
       }>;
     }>(res.content);
 
-    if (parsed && Array.isArray(parsed.steps) && parsed.steps.length >= 3) {
+    if (parsed && Array.isArray(parsed.steps) && parsed.steps.length >= 3 && parsed.steps.every((step) => Array.isArray(step.actions) && step.actions.filter((action) => typeof action === 'string' && action.trim()).length >= 3)) {
       const steps: DreamStep[] = parsed.steps.slice(0, 6).map((s, idx) => {
         const prevStep = player.dreamSteps[idx];
         const fallbackLvl = Math.max(
@@ -441,6 +449,9 @@ Make sure there are exactly 5 steps whose targetLevel increases smoothly up to $
             90,
             Math.min(1800, Number(s.targetMinutes) || (bd.study + bd.work) * (idx + 2))
           ),
+          actions: Array.isArray(s.actions)
+            ? [...new Set(s.actions.filter((action) => typeof action === 'string').map((action) => action.trim().slice(0, 140)).filter(Boolean))].slice(0, 6)
+            : [],
           completedMinutes: prevStep?.completedMinutes ?? 0,
           skillName: (s.skillName?.trim() || 'Core Mastery').slice(0, 42),
           completed: prevStep?.completed ?? false,

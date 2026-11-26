@@ -17,9 +17,15 @@ Aplikasi web progresif (**PWA**) lintas perangkat untuk **HP (Android / iPhone)*
 - **Skill dan upgrade diri** dengan detail sesi, riwayat aktivitas, dan rekomendasi yang mengikuti progres peta impian.
 - **Berita promo harian** dari halaman publik Indomaret dan feed Alfagift dengan tanggal dan tautan sumber.
 
-Catatan jurnal akun tersinkron melalui Firebase Firestore. Catatan tamu dan foto profil tersimpan di perangkat. Foto yang sudah dibuat pada versi sebelumnya dapat dipakai di panel energi. Status energi merupakan gambaran dari catatan pemain untuk refleksi harian. Panel gizi mengacu pada [Isi Piringku](https://ayosehat.kemkes.go.id/isi-piringku-kebutuhan-gizi-harian-seimbang) dan panduan tidur [CDC](https://www.cdc.gov/sleep/about/).
+Catatan jurnal akun tersinkron melalui Firebase Firestore. Catatan tamu dan foto profil tersimpan di perangkat. Foto yang sudah dibuat pada versi sebelumnya dapat dipakai di panel energi. Status energi merupakan gambaran dari catatan pemain untuk refleksi harian. Foto makanan dan agenda .ics tersimpan di perangkat. Kelompok makanan berasal dari pilihan pemain saat mencatat makan.
 
 GitHub Actions menjalankan pengambilan berita setiap hari sekitar 07.23 WIB dan menerbitkan hasilnya ke branch `promo-news`. Untuk memeriksa hasil sumber secara lokal, jalankan `python3 scripts/refresh-promo-news.py /tmp/levelup-promo-news.json`.
+
+Profil kerja memuat industri, tanggung jawab, dan proyek aktif. Panel Tugas memadukan cek sprint atau progres, tindak lanjut rapat, impor agenda Kalender Google, dan rencana latihan yang menyesuaikan tidur, makan, dan catatan capek atau nyeri. Langkah kecil Peta Impian dapat dijadikan tugas dan tersimpan saat selesai.
+
+Admin menambahkan alamat terverifikasi melalui panel Email dengan Akses Admin. Pemain baru membuat akun melalui situs publik. Proxy Agnes produksi di folder `proxy/` menggunakan identitas Firebase dengan akses terbatas ke konfigurasi Agnes dan kuota. Atur `VITE_AI_PROXY_URL` ke alias produksi proxy pada build Hosting.
+
+Izin Google Calendar langsung menggunakan `calendar.events.owned.readonly`. Kedua domain harus menjadi JavaScript origin pada OAuth Web Client. Aktifkan `VITE_CALENDAR_OAUTH_ENABLED` setelah scope ini mendapatkan verifikasi Google. Impor .ics tersedia saat peninjauan berlangsung.
 
 ## Struktur Project
 

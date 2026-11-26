@@ -13,6 +13,9 @@ import { PROFESSIONS_DB } from '../data/professions';
 import { tr } from '../data/i18n';
 import { calculateBiometrics, playSFX, type CreateProfileInput } from '../engine/science';
 
+import { CareerFields, GymFields } from './CoachPanels';
+import { defaultCareer, defaultGym } from '../engine/coaching';
+
 interface AwakeningViewProps {
   lang: Language;
   isCloudLoggedIn: boolean;
@@ -26,6 +29,8 @@ export const AwakeningView: React.FC<AwakeningViewProps> = ({
   onOpenCloudLogin,
   onCompleteAwakening,
 }) => {
+  const [career, setCareer] = useState(defaultCareer);
+  const [gym, setGym] = useState(defaultGym);
   const [name, setName] = useState('');
   const [gender, setGender] = useState<Gender>('male');
   const [age, setAge] = useState(24);
@@ -77,6 +82,7 @@ export const AwakeningView: React.FC<AwakeningViewProps> = ({
       targetLevel,
       dailyBudget,
       customProfName: isCustomProf ? customProfName : undefined,
+      career, gym,
       selectedPreset,
       lang,
     });
@@ -417,6 +423,14 @@ export const AwakeningView: React.FC<AwakeningViewProps> = ({
             </div>
 
             <div className="pt-1">
+              <fieldset className="space-y-3 rounded border border-slate-200 p-3">
+                <legend className="px-1 text-xs font-bold">{lang === 'id' ? 'Pekerjaanmu' : 'Your work'}</legend>
+                <CareerFields lang={lang} value={career} onChange={setCareer} includeProject={false} />
+              </fieldset>
+              <fieldset className="space-y-3 rounded border border-slate-200 p-3">
+                <legend className="px-1 text-xs font-bold">{lang === 'id' ? 'Profil latihan' : 'Workout profile'}</legend>
+                <GymFields lang={lang} value={gym} onChange={setGym} />
+              </fieldset>
               <button
                 type="submit"
                 className="w-full py-3.5 px-6 bg-slate-900 hover:bg-sky-700 text-white font-hud font-bold text-base uppercase tracking-widest btn-anime shadow-md flex items-center justify-center gap-2"
