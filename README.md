@@ -1,4 +1,4 @@
-# LEVEL UP SYSTEM // Studio OS v3.3 (PWA + Firebase + Admin Shared AI)
+# Level Up System || Awaken Your Entrepreneurial Spirit
 
 > [Level Up PWA](https://levelup.sociopreneur.online/)
 >
@@ -25,7 +25,9 @@ Profil kerja memuat industri, tanggung jawab, dan proyek aktif. Panel Tugas mema
 
 Aturan aplikasi menyusun Peta Impian, memilih fokus hari ini dari jurnal, agenda, proyek aktif, waktu tersisa dan kemajuan skill, serta menyesuaikan latihan dan rekomendasi pengembangan diri. Agnes menerima tujuan dan judul tahap untuk mengusulkan langkah kecil. Keputusan tentang jadwal, bobot progres, dan aktivitas harian tetap dihitung oleh aplikasi.
 
-Admin menambahkan alamat terverifikasi melalui panel Email dengan Akses Admin. Pemain baru membuat akun melalui situs publik. Proxy Agnes produksi di folder `proxy/` menggunakan identitas Firebase dengan akses terbatas ke konfigurasi Agnes dan kuota. Atur `VITE_AI_PROXY_URL` ke alias produksi proxy pada build Hosting.
+Admin mengelola email terverifikasi melalui panel Peran & Izin Admin. Admin mengatur peran dan Agnes, Operator mengelola status serta kuota player, dan Auditor membaca direktori serta log AI. Pemain baru membuat akun melalui situs publik. Proxy Agnes produksi di folder `proxy/` menggunakan identitas Firebase dengan akses terbatas ke konfigurasi Agnes dan kuota. Atur `VITE_AI_PROXY_URL` ke alias produksi proxy pada build Hosting.
+
+Saat login, profil dibaca menurut akun Firebase dan cache perangkat juga dibatasi ke akun tersebut. Jika akun belum memiliki profil Cloud, pemain dapat memilih menyambungkan profil dan jurnal yang sudah dimiliki perangkat. Mood check-in tersinkron sebagai bagian dari jurnal pribadi. Renungan dan bahan doa disusun di perangkat dari mood, aktivitas, progres, dan agenda yang tersedia.
 
 Izin Google Calendar langsung menggunakan `calendar.events.owned.readonly`. Kedua domain harus menjadi JavaScript origin pada OAuth Web Client. Aktifkan `VITE_CALENDAR_OAUTH_ENABLED` setelah scope ini mendapatkan verifikasi Google. Impor .ics tersedia saat peninjauan berlangsung.
 

@@ -15,6 +15,7 @@ import {
 import type { User } from 'firebase/auth';
 import type { Language, SyncStatus } from '../types';
 import { tr } from '../data/i18n';
+import { brandName, brandTagline } from '../data/brand';
 
 interface HeaderProps {
   lang: Language;
@@ -95,17 +96,8 @@ export const Header: React.FC<HeaderProps> = ({
             <Cpu className="w-4 h-4" />
           </div>
           <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <span className="font-hud font-bold text-sm sm:text-base tracking-wider text-slate-900 truncate">
-                LEVEL UP SYSTEM
-              </span>
-              <span className="hidden sm:inline-block font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 border border-sky-300 flex-shrink-0">
-                STUDIO OS v3.3
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-500 hidden sm:block truncate">
-              {tr(lang, 'headerSubtitle')}
-            </p>
+            <p className="font-hud text-sm font-bold leading-tight text-slate-900 sm:text-base">{brandName}</p>
+            <p lang="en" className="mt-0.5 text-[10px] leading-tight text-slate-600 sm:text-[11px]">{brandTagline}</p>
           </div>
         </div>
 

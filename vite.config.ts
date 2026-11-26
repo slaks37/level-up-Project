@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { brandName, brandTitle } from './src/data/brand.ts';
 
 export default defineConfig({
   plugins: [
@@ -11,9 +12,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
-        name: 'LEVEL UP SYSTEM — Bio-Tactical & Career OS',
-        short_name: 'Level Up OS',
-        description: 'Science-based career, study & fitness leveling app with AI Coach, a daily journal, and real-time cloud sync.',
+        name: brandTitle,
+        short_name: brandName,
+        description: 'Build your goals, track daily progress, and grow through work, study, and healthy habits.',
         theme_color: '#0f172a',
         background_color: '#eef2f6',
         display: 'standalone',

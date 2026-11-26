@@ -26,9 +26,9 @@ export const DEFAULT_AI_CONFIG: AIConfig = {
   proxyBaseUrl: import.meta.env.VITE_AI_PROXY_URL || '',
 };
 
-export function loadLocalPlayer(lang: Language): PlayerProfile | null {
+export function loadLocalPlayer(lang: Language, uid?: string): PlayerProfile | null {
   try {
-    const raw =
+    const raw = uid ? localStorage.getItem(KEYS.PLAYER + ':' + uid) :
       localStorage.getItem(KEYS.PLAYER) || localStorage.getItem(KEYS.LEGACY_PLAYER);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PlayerProfile>;
@@ -39,14 +39,15 @@ export function loadLocalPlayer(lang: Language): PlayerProfile | null {
   }
 }
 
-export function saveLocalPlayer(player: PlayerProfile | null): void {
+export function saveLocalPlayer(player: PlayerProfile | null, uid?: string): void {
   try {
+    const key = uid ? KEYS.PLAYER + ':' + uid : KEYS.PLAYER;
     if (!player) {
-      localStorage.removeItem(KEYS.PLAYER);
-      localStorage.removeItem(KEYS.LEGACY_PLAYER);
+      localStorage.removeItem(key);
+      if (!uid) localStorage.removeItem(KEYS.LEGACY_PLAYER);
       return;
     }
-    localStorage.setItem(KEYS.PLAYER, JSON.stringify(player));
+    localStorage.setItem(key, JSON.stringify(player));
   } catch {
     // Ignore storage quota errors
   }

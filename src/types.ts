@@ -253,7 +253,7 @@ export interface UserAccountRecord {
   displayName: string;
   email: string;
   language: Language;
-  role: 'user' | 'admin';
+  role: 'user' | 'admin' | 'operator' | 'auditor';
   status: 'active' | 'suspended';
   aiRequestsToday: number;
   aiTotalRequests: number;

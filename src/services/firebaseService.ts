@@ -1,3 +1,4 @@
+import { assignableAdminRoles, type AdminRole, type AssignableAdminRole } from '../engine/access';
 import { initializeApp, getApps, deleteApp, type FirebaseApp } from 'firebase/app';
 import {
   getAuth,
@@ -34,6 +35,7 @@ import {
   orderBy,
   limit,
   getDocs,
+  runTransaction,
   serverTimestamp,
   type Firestore,
   type Unsubscribe,
@@ -201,22 +203,48 @@ export async function signOutUser(): Promise<void> {
 // =========================================================================
 // ADMIN ROLE DETECTION & MANAGEMENT
 // =========================================================================
-export async function checkIsUserAdmin(user: User | null): Promise<{
-  isAdmin: boolean;
-  isUnverifiedBootstrapAdmin: boolean;
-}> {
+function grantRole(value: unknown): AssignableAdminRole | null {
+  const role = value ?? 'admin';
+  return assignableAdminRoles.find((item) => item === role) ?? null;
+}
+
+export async function checkIsUserAdmin(user: User | null) {
   const email = user?.email?.trim().toLowerCase() || '';
   const isUnverifiedBootstrapAdmin = Boolean(email && email === BOOTSTRAP_ADMIN_EMAIL && !user?.emailVerified);
-  if (!user?.emailVerified || !email) return { isAdmin: false, isUnverifiedBootstrapAdmin };
-  if (email === BOOTSTRAP_ADMIN_EMAIL) return { isAdmin: true, isUnverifiedBootstrapAdmin: false };
-  if (!firestoreDb) return { isAdmin: false, isUnverifiedBootstrapAdmin: false };
-  const database = firestoreDb;
+  if (!user?.emailVerified || !email) return { role: null, isAdmin: false, isUnverifiedBootstrapAdmin };
+  if (email === BOOTSTRAP_ADMIN_EMAIL) return { role: 'owner' as const, isAdmin: true, isUnverifiedBootstrapAdmin: false };
+  if (!firestoreDb) return { role: null, isAdmin: false, isUnverifiedBootstrapAdmin: false };
   const [grant, invitation] = await Promise.all([
-    getDocFromServer(doc(database, 'admins', user.uid)).catch(() => null),
-    getDocFromServer(doc(database, 'adminEmails', email)).catch(() => null),
+    getDocFromServer(doc(firestoreDb, 'admins', user.uid)).catch(() => null),
+    getDocFromServer(doc(firestoreDb, 'adminEmails', email)).catch(() => null),
   ]);
-  return { isAdmin: Boolean(invitation?.exists() || (grant?.exists() && String(grant.data().email).toLowerCase() === email)),
-    isUnverifiedBootstrapAdmin: false };
+  const role = invitation?.exists() ? grantRole(invitation.data().role) :
+    grant?.exists() && String(grant.data().email).toLowerCase() === email ? 'admin' as const : null;
+  return { role, isAdmin: Boolean(role), isUnverifiedBootstrapAdmin: false };
+}
+
+export function watchAdminAccess(user: User, onChange: (role: AdminRole | null) => void): Unsubscribe {
+  const email = user.email?.trim().toLowerCase();
+  if (!firestoreDb || !user.emailVerified || !email || email === BOOTSTRAP_ADMIN_EMAIL) return () => {};
+  const db = firestoreDb;
+  let currentEmail: { role: AdminRole | null } | null | undefined;
+  let legacy: AdminRole | null | undefined;
+  const notify = () => {
+    if (currentEmail !== undefined && legacy !== undefined) onChange(currentEmail ? currentEmail.role : legacy);
+  };
+  const stops = [
+    onSnapshot(doc(db, 'adminEmails', email), { includeMetadataChanges: true }, (snapshot) => {
+      if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
+      currentEmail = snapshot.exists() ? { role: grantRole(snapshot.data().role) } : null;
+      notify();
+    }, () => {}),
+    onSnapshot(doc(db, 'admins', user.uid), { includeMetadataChanges: true }, (snapshot) => {
+      if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
+      legacy = snapshot.exists() && String(snapshot.data().email).toLowerCase() === email ? 'admin' : null;
+      notify();
+    }, () => {}),
+  ];
+  return () => stops.forEach((stop) => stop());
 }
 
 export async function requireAdminSession(user: User): Promise<User> {
@@ -257,34 +285,65 @@ export async function signInExistingAdminWithGoogle(): Promise<User> {
   return requireAdminSession(credential.user);
 }
 
-export async function fetchAdminEmails(): Promise<string[]> {
+export interface AdminRoleGrant {
+  email: string;
+  role: AssignableAdminRole;
+}
+
+export async function fetchAdminRoleGrants(): Promise<AdminRoleGrant[]> {
   if (!firestoreDb) return [];
-  const snapshot = await getDocs(collection(firestoreDb, 'adminEmails'));
-  return snapshot.docs.map((entry) => entry.id).sort();
+  const [assigned, legacy] = await Promise.all([
+    getDocs(collection(firestoreDb, 'adminEmails')),
+    getDocs(collection(firestoreDb, 'admins')),
+  ]);
+  const roles = new Map<string, AssignableAdminRole>();
+  for (const entry of legacy.docs) {
+    const email = String(entry.data().email || '').trim().toLowerCase();
+    if (email) roles.set(email, 'admin');
+  }
+  for (const entry of assigned.docs) {
+    const role = grantRole(entry.data().role);
+    if (role) roles.set(entry.id, role);
+  }
+  roles.delete(BOOTSTRAP_ADMIN_EMAIL);
+  return [...roles].sort(([left], [right]) => left.localeCompare(right)).map(([email, role]) => ({ email, role }));
 }
 
-export async function addAdminEmail(actor: User, value: string): Promise<string> {
+export async function setAdminRoleGrant(actor: User, address: string, role: AssignableAdminRole | null): Promise<void> {
   if (!firestoreDb) throw new Error('Firestore belum siap.');
-  const email = value.trim().toLowerCase();
+  const db = firestoreDb;
+  const email = address.trim().toLowerCase();
   if (!/^[^@\s/]+@[^@\s/]+\.[^@\s/]+$/.test(email) || email.length > 254) throw new Error('Email tidak valid.');
-  if (email === BOOTSTRAP_ADMIN_EMAIL) return email;
-  const ref = doc(firestoreDb, 'adminEmails', email);
-  if (!(await getDocFromServer(ref)).exists()) await setDoc(ref, { email, grantedBy: actor.uid, createdAt: serverTimestamp() });
-  return email;
-}
-
-export async function revokeAdminEmail(email: string): Promise<void> {
-  if (!firestoreDb) throw new Error('Firestore belum siap.');
-  await deleteDoc(doc(firestoreDb, 'adminEmails', email));
+  if (email === BOOTSTRAP_ADMIN_EMAIL || email === actor.email?.trim().toLowerCase()) {
+    throw new Error('Peran Super Admin dan akun sendiri tidak dapat diubah di sini.');
+  }
+  const ref = doc(db, 'adminEmails', email);
+  if (role) {
+    await runTransaction(db, async (transaction) => {
+      if ((await transaction.get(ref)).exists()) {
+        transaction.update(ref, { role, updatedBy: actor.uid, updatedAt: serverTimestamp() });
+      } else {
+        transaction.set(ref, { email, role, grantedBy: actor.uid, createdAt: serverTimestamp() });
+      }
+    });
+  } else {
+    const legacy = await getDocs(collection(db, 'admins'));
+    const batch = writeBatch(db);
+    batch.delete(ref);
+    legacy.docs.filter((entry) => String(entry.data().email).trim().toLowerCase() === email)
+      .forEach((entry) => batch.delete(entry.ref));
+    await batch.commit();
+  }
 }
 
 export async function upsertUserMeta(
   user: User,
   lang: Language,
-  isAdmin = false
+  adminRole: AdminRole | null = null
 ): Promise<void> {
   if (!firestoreDb) return;
   const userRef = doc(firestoreDb, 'users', user.uid);
+  const accountRole = adminRole === 'owner' ? 'admin' : adminRole || 'user';
   const existing = await getDoc(userRef);
 
   const safeName = (user.displayName || user.email?.split('@')[0] || 'Hunter').slice(0, 120);
@@ -296,7 +355,7 @@ export async function upsertUserMeta(
       displayName: safeName,
       email: safeEmail,
       language: lang,
-      role: isAdmin ? 'admin' : 'user',
+      role: accountRole,
       status: 'active',
       aiRequestsToday: 0,
       aiTotalRequests: 0,
@@ -305,16 +364,11 @@ export async function upsertUserMeta(
       updatedAt: serverTimestamp(),
     });
   } else {
-    const data = existing.data() || {};
     await updateDoc(userRef, {
       displayName: safeName,
       email: safeEmail,
       language: lang,
-      role: data.role || (isAdmin ? 'admin' : 'user'),
-      status: data.status || 'active',
-      aiRequestsToday: typeof data.aiRequestsToday === 'number' ? data.aiRequestsToday : 0,
-      aiTotalRequests: typeof data.aiTotalRequests === 'number' ? data.aiTotalRequests : 0,
-      aiQuotaDate: typeof data.aiQuotaDate === 'string' ? data.aiQuotaDate : '',
+      role: accountRole,
       updatedAt: serverTimestamp(),
     });
   }
@@ -435,7 +489,7 @@ export async function fetchAllUsersForAdmin(): Promise<UserAccountRecord[]> {
       displayName: String(data.displayName || 'Hunter'),
       email: String(data.email || ''),
       language: data.language === 'en' ? 'en' : 'id',
-      role: data.role === 'admin' ? 'admin' : 'user',
+      role: grantRole(data.role ?? 'user') ?? 'user',
       status: data.status === 'suspended' ? 'suspended' : 'active',
       aiRequestsToday: Number(data.aiRequestsToday || 0),
       aiTotalRequests: Number(data.aiTotalRequests || 0),
@@ -461,31 +515,6 @@ export async function resetUserDailyQuota(uid: string): Promise<void> {
     aiRequestsToday: 0,
     updatedAt: serverTimestamp(),
   });
-}
-
-export async function grantOrRevokeAdmin(
-  actingAdmin: User,
-  target: UserAccountRecord,
-  makeAdmin: boolean
-): Promise<void> {
-  if (!firestoreDb) throw new Error('Firestore belum siap.');
-  const adminRef = doc(firestoreDb, 'admins', target.ownerUid);
-  const userRef = doc(firestoreDb, 'users', target.ownerUid);
-
-  const email = target.email.trim().toLowerCase();
-  if (!email || email === BOOTSTRAP_ADMIN_EMAIL) throw new Error('Email admin utama tidak dapat diubah di sini.');
-  const batch = writeBatch(firestoreDb);
-  if (makeAdmin) {
-    const invitation = doc(firestoreDb, 'adminEmails', email);
-    if (!(await getDocFromServer(invitation)).exists()) {
-      batch.set(invitation, { email, grantedBy: actingAdmin.uid, createdAt: serverTimestamp() });
-    }
-  } else {
-    batch.delete(adminRef);
-    batch.delete(doc(firestoreDb, 'adminEmails', email));
-  }
-  batch.update(userRef, { role: makeAdmin ? 'admin' : 'user', updatedAt: serverTimestamp() });
-  await batch.commit();
 }
 
 export async function fetchAdminUsageLogs(maxCount = 40): Promise<AIUsageLogRecord[]> {
@@ -602,9 +631,32 @@ function sanitizeProfileForFirestore(uid: string, player: PlayerProfile) {
 }
 
 export async function saveProfileToCloud(uid: string, player: PlayerProfile): Promise<void> {
-  if (!firestoreDb) return;
+  if (!firestoreDb) throw new Error('Firestore unavailable');
   const profileRef = doc(firestoreDb, 'users', uid, 'profile', 'main');
   await setDoc(profileRef, sanitizeProfileForFirestore(uid, player));
+}
+
+export async function initializeCloudProfile(uid: string, player: PlayerProfile,
+  history?: { logs: DailyLogEntry[]; journal: JournalEntry[] }): Promise<boolean> {
+  if (!firestoreDb) throw new Error('Firestore unavailable');
+  const db = firestoreDb;
+  return runTransaction(db, async (transaction) => {
+    const owner = doc(db, 'users', uid);
+    const profile = doc(owner, 'profile', 'main');
+    if ((await transaction.get(profile)).exists()) return false;
+    const logs = (history?.logs || []).filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry.dateKey)).slice(0, 60);
+    const journal = (history?.journal || []).filter((entry) => typeof entry.id === 'string' && entry.id && !entry.id.includes('/')).slice(0, 360);
+    const pending = [
+      ...logs.map((entry) => ({ ref: doc(owner, 'dailyLogs', entry.dateKey), data: dailyLogDocument(uid, entry) })),
+      ...journal.map(({ id, ...data }) => ({ ref: doc(owner, 'journal', id), data: stripUndefined(data) })),
+    ];
+    const prior = await Promise.all(pending.map(({ ref }) => transaction.get(ref)));
+    transaction.set(profile, sanitizeProfileForFirestore(uid, player));
+    pending.forEach(({ ref, data }, index) => {
+      if (!prior[index].exists()) transaction.set(ref, data);
+    });
+    return true;
+  });
 }
 
 export async function deleteProfileFromCloud(uid: string): Promise<void> {
@@ -616,20 +668,21 @@ export async function deleteProfileFromCloud(uid: string): Promise<void> {
 export function subscribeProfileFromCloud(
   uid: string,
   lang: Language,
-  onProfile: (profile: PlayerProfile | null, fromCache: boolean) => void,
+  onProfile: (profile: PlayerProfile | null, metadata: { fromCache: boolean; hasPendingWrites: boolean }) => void,
   onError: (err: Error) => void
 ): Unsubscribe {
   if (!firestoreDb) return () => {};
   const profileRef = doc(firestoreDb, 'users', uid, 'profile', 'main');
   return onSnapshot(
     profileRef,
+    { includeMetadataChanges: true },
     (snap) => {
       if (!snap.exists()) {
-        onProfile(null, snap.metadata.fromCache);
+        onProfile(null, snap.metadata);
         return;
       }
       const data = snap.data() as Partial<PlayerProfile>;
-      onProfile(normalizePlayerProfile(data, lang), snap.metadata.fromCache);
+      onProfile(normalizePlayerProfile(data, lang), snap.metadata);
     },
     (err) => {
       onError(err);
@@ -640,7 +693,11 @@ export function subscribeProfileFromCloud(
 export async function saveDailyLogToCloud(uid: string, entry: DailyLogEntry): Promise<void> {
   if (!firestoreDb) return;
   const logRef = doc(firestoreDb, 'users', uid, 'dailyLogs', entry.dateKey);
-  await setDoc(logRef, {
+  await setDoc(logRef, dailyLogDocument(uid, entry));
+}
+
+function dailyLogDocument(uid: string, entry: DailyLogEntry) {
+  return {
     ownerUid: uid,
     dateKey: entry.dateKey,
     completedTasks: Math.max(0, Math.min(100, Math.round(entry.completedTasks))),
@@ -654,7 +711,7 @@ export async function saveDailyLogToCloud(uid: string, entry: DailyLogEntry): Pr
     sleepCondition: entry.sleepCondition,
     nutritionCondition: entry.nutritionCondition,
     createdAt: serverTimestamp(),
-  });
+  };
 }
 
 export async function fetchRecentDailyLogs(uid: string, maxCount = 14): Promise<DailyLogEntry[]> {
@@ -682,13 +739,13 @@ export async function fetchRecentDailyLogs(uid: string, maxCount = 14): Promise<
 
 export function subscribeJournal(
   uid: string,
-  onEntries: (entries: JournalEntry[]) => void,
+  onEntries: (entries: JournalEntry[], fromCache: boolean) => void,
   onError: () => void,
 ): Unsubscribe {
   if (!firestoreDb) return () => {};
   const entries = query(collection(firestoreDb, 'users', uid, 'journal'), orderBy('dateKey', 'desc'), limit(360));
-  return onSnapshot(entries, (snapshot) => {
-    onEntries(snapshot.docs.map((entry) => ({ ...entry.data(), id: entry.id }) as JournalEntry));
+  return onSnapshot(entries, { includeMetadataChanges: true }, (snapshot) => {
+    onEntries(snapshot.docs.map((entry) => ({ ...entry.data(), id: entry.id }) as JournalEntry), snapshot.metadata.fromCache);
   }, onError);
 }
 

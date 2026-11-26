@@ -160,7 +160,7 @@ service cloud.firestore {
       return isAuthenticated() &&
         'email' in request.auth.token &&
         'email_verified' in request.auth.token &&
-        request.auth.token.email == 'stefenlaksana.sl@gmail.com' &&
+        request.auth.token.email is string && request.auth.token.email.lower() == 'stefenlaksana.sl@gmail.com' &&
         request.auth.token.email_verified == true;
     }
 
@@ -169,12 +169,26 @@ service cloud.firestore {
         request.auth.token.get('email', '') is string && request.auth.token.get('email', '').size() > 0;
     }
 
-    function isAdmin() {
-      return isBootstrapAdmin() || (hasVerifiedEmail() && (
-        exists(/databases/$(database)/documents/adminEmails/$(request.auth.token.email.lower())) ||
-        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
-          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.email.lower() == request.auth.token.email.lower())
-      ));
+    function verifiedStaffRole() {
+      let email = request.auth.token.email.lower();
+      let grant = /databases/$(database)/documents/adminEmails/$(email);
+      let legacy = /databases/$(database)/documents/admins/$(request.auth.uid);
+      return exists(grant) ? get(grant).data.get('role', 'admin') :
+        (exists(legacy) && get(legacy).data.email.lower() == email ? 'admin' : 'user');
+    }
+
+    function staffRole() {
+      return isBootstrapAdmin() ? 'admin' : (hasVerifiedEmail() ? verifiedStaffRole() : 'user');
+    }
+
+    function isAdmin() { return staffRole() == 'admin'; }
+    function isStaff() { return staffRole() in ['admin', 'operator', 'auditor']; }
+    function canAuditAI() { return staffRole() in ['admin', 'auditor']; }
+
+    function isStaffTarget(userId, email) {
+      return email.lower() == 'stefenlaksana.sl@gmail.com' ||
+        exists(/databases/$(database)/documents/adminEmails/$(email.lower())) ||
+        exists(/databases/$(database)/documents/admins/$(userId));
     }
 
     function isAIProxy() {
@@ -200,12 +214,6 @@ service cloud.firestore {
 
     function hasOnlyAllowedFields(fields) {
       return request.resource.data.keys().hasOnly(fields);
-    }
-
-    function hasExactKeys(mapData, allowedKeys) {
-      return mapData is map &&
-        mapData.keys().hasOnly(allowedKeys) &&
-        mapData.keys().hasAll(allowedKeys);
     }
 
     function areImmutableFieldsUnchanged(fields) {
@@ -264,38 +272,7 @@ service cloud.firestore {
     // Nested Map Validators (Profile)
     // ===============================================================
 
-    function isValidBio(bio) {
-      return hasExactKeys(bio, ['bmi', 'bmiCategory', 'bmr', 'proteinTarget']) &&
-        isNumberInRange(bio.bmi, 0, 200) &&
-        isValidString(bio.bmiCategory, 0, 60) &&
-        isNumberInRange(bio.bmr, 0, 20000) &&
-        isNumberInRange(bio.proteinTarget, 0, 1000);
-    }
-
-    function isValidDailyBreakdown(bd) {
-      return hasExactKeys(bd, ['total', 'study', 'work', 'fitness']) &&
-        isNumberInRange(bd.total, 0, 86400) &&
-        isNumberInRange(bd.study, 0, 86400) &&
-        isNumberInRange(bd.work, 0, 86400) &&
-        isNumberInRange(bd.fitness, 0, 86400);
-    }
-
-    function isValidDailyDurationLog(log) {
-      return hasExactKeys(log, ['study', 'work', 'fitness']) &&
-        isNumberInRange(log.study, 0, 86400) &&
-        isNumberInRange(log.work, 0, 86400) &&
-        isNumberInRange(log.fitness, 0, 86400);
-    }
-
     // Bracket indexing used on 'int' because 'int' is a reserved keyword in CEL.
-    function isValidStats(s) {
-      return hasExactKeys(s, ['str', 'vit', 'int', 'agi', 'cha']) &&
-        isNumberInRange(s['str'], 0, 1000000) &&
-        isNumberInRange(s['vit'], 0, 1000000) &&
-        isNumberInRange(s['int'], 0, 1000000) &&
-        isNumberInRange(s['agi'], 0, 1000000) &&
-        isNumberInRange(s['cha'], 0, 1000000);
-    }
 
     function isValidSkillProgress(sp) {
       return sp is map &&
@@ -304,14 +281,6 @@ service cloud.firestore {
           'apiKey', 'geminiApiKey', 'openaiApiKey',
           'secretKey', 'privateKey', 'accessToken'
         ]);
-    }
-
-    function isValidBoss(boss) {
-      return hasExactKeys(boss, ['name', 'desc', 'hp', 'maxHp']) &&
-        isValidString(boss.name, 0, 300) &&
-        isValidString(boss.desc, 0, 500) &&
-        isNumberInRange(boss.hp, 0, 10000000) &&
-        isNumberInRange(boss.maxHp, 1, 10000000);
     }
 
     // ===============================================================
@@ -376,7 +345,7 @@ service cloud.firestore {
         isValidString(data.email, 0, 254) &&
         (data.email.size() == 0 || isValidEmail(data.email)) &&
         data.language is string && data.language in ['id', 'en'] &&
-        data.role is string && data.role in ['user', 'admin'] &&
+        data.role is string && data.role in ['user', 'admin', 'operator', 'auditor'] &&
         data.status is string && data.status in ['active', 'suspended'] &&
         isIntInRange(data.aiRequestsToday, 0, 10000) &&
         isIntInRange(data.aiTotalRequests, 0, 1000000) &&
@@ -384,22 +353,6 @@ service cloud.firestore {
         (data.aiQuotaDate.size() == 0 || isValidDateKey(data.aiQuotaDate)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
-    }
-
-    function isValidCareer(data) {
-      return data is map &&
-        data.keys().hasOnly(['industry','responsibilities','managesTeam','usesSprints','project','projectStatus','lastMeeting','nextAction']) &&
-        isValidString(data.industry, 0, 100) && isValidString(data.responsibilities, 0, 500) &&
-        data.managesTeam is bool && data.usesSprints is bool &&
-        isValidString(data.project, 0, 120) && data.projectStatus in ['planning','in_progress','blocked','done'] &&
-        isValidString(data.lastMeeting, 0, 300) && isValidString(data.nextAction, 0, 140);
-    }
-
-    function isValidGym(data) {
-      return data is map && data.keys().hasOnly(['goal','level','equipment','days','limitations','currentPain']) &&
-        data.goal in ['strength','endurance','general'] && data.level in ['beginner','regular'] &&
-        data.equipment in ['home','gym'] && isIntInRange(data.days,1,5) &&
-        isValidString(data.limitations,0,300) && data.currentPain is bool;
     }
 
     function isValidWorkout(data) {
@@ -421,47 +374,30 @@ service cloud.firestore {
         'dreamSteps', 'rewards', 'discoveredPerks',
         'growthNews', 'groundingSources', 'boss'
       ];
-      return hasOnlyAllowedFields(allowedFields.concat(['career', 'gym'])) &&
-        hasRequiredFields(allowedFields) &&
-        (!('career' in data) || isValidCareer(data.career)) &&
-        (!('gym' in data) || isValidGym(data.gym)) &&
-        data.ownerUid is string && data.ownerUid == userId &&
-        isIntInRange(data.schemaVersion, 1, 20) &&
-        data.updatedAt is timestamp &&
-        isValidString(data.name, 1, 100) &&
-        data.gender is string && data.gender in ['male', 'female'] &&
-        isNumberInRange(data.age, 10, 120) &&
-        isNumberInRange(data.height, 100, 250) &&
-        isNumberInRange(data.weight, 25, 300) &&
-        isValidString(data.city, 0, 100) &&
-        isValidString(data.rewardInterest, 0, 300) &&
-        isValidBio(data.bio) &&
-        isValidString(data.profession, 1, 160) &&
-        isValidString(data.classTitle, 1, 120) &&
-        isValidString(data.goal, 1, 300) &&
-        isIntInRange(data.targetLevel, 1, 999) &&
-        isValidDailyBreakdown(data.dailyBreakdown) &&
-        isValidDailyDurationLog(data.dailyDurationLog) &&
-        isValidString(data.coachAdvice, 0, 1000) &&
-        isIntInRange(data.level, 1, 999) &&
-        isIntInRange(data.exp, 0, 10000000) &&
-        isIntInRange(data.maxExp, 1, 10000000) &&
-        isIntInRange(data.gold, 0, 10000000) &&
-        isIntInRange(data.streak, 0, 100000) &&
-        isIntInRange(data.coreCharge, 0, 4) &&
-        isValidSleepCondition(data.sleepCondition) &&
-        isValidNutritionCondition(data.nutritionCondition) &&
-        isValidStats(data.stats) &&
-        isValidList(data.stages, 20) &&
-        isValidList(data.quests, 100) &&
-        isValidList(data.shadows, 200) &&
-        isValidSkillProgress(data.skillProgress) &&
-        isValidList(data.dreamSteps, 50) &&
-        isValidList(data.rewards, 50) &&
-        isValidList(data.discoveredPerks, 30) &&
-        isValidList(data.growthNews, 30) &&
+      // Keep this owner-only schema under the rules expression limit.
+      // The player serializer normalizes computed values before writing.
+      let keys = data.keys();
+      return keys.hasAll(allowedFields) && keys.hasOnly(allowedFields.concat(['career', 'gym'])) &&
+        data.ownerUid == userId && data.schemaVersion is int && data.updatedAt is timestamp &&
+        data.gender in ['male', 'female'] && data.name is string && data.goal is string &&
+        data.city is string && data.rewardInterest is string && data.profession is string &&
+        data.classTitle is string && data.coachAdvice is string && data.targetLevel is int &&
+        data.age is number && data.height is number && data.weight is number &&
+        data.level is int && data.exp is int && data.maxExp is int && data.gold is int &&
+        data.streak is int && data.coreCharge is int &&
+        data.sleepCondition in ['poor', 'moderate', 'optimal'] &&
+        data.nutritionCondition in ['deficit', 'balanced', 'high_protein'] &&
+        data.bio is map && data.dailyBreakdown is map && data.dailyDurationLog is map &&
+        data.stats is map && data.boss is map &&
+        isValidList(data.stages, 20) && isValidList(data.quests, 100) &&
+        isValidList(data.shadows, 200) && isValidSkillProgress(data.skillProgress) &&
+        isValidList(data.dreamSteps, 50) && isValidList(data.rewards, 50) &&
+        isValidList(data.discoveredPerks, 30) && isValidList(data.growthNews, 30) &&
         isValidList(data.groundingSources, 30) &&
-        isValidBoss(data.boss);
+        (!keys.hasAny(['career']) || (data.career is map &&
+          data.career.keys().hasOnly(['industry','responsibilities','managesTeam','usesSprints','project','projectStatus','lastMeeting','nextAction']))) &&
+        (!keys.hasAny(['gym']) || (data.gym is map &&
+          data.gym.keys().hasOnly(['goal','level','equipment','days','limitations','currentPain'])));
     }
 
     function isValidJournalEntry(data, entryId) {
@@ -472,7 +408,7 @@ service cloud.firestore {
         data.updatedAt is int && data.updatedAt >= 0 &&
         (
           (data.kind == 'checkin' &&
-            data.keys().hasOnly(base.concat(checkIn).concat(['mealEnjoyment', 'mealGroups'])) && data.keys().hasAll(base.concat(checkIn)) &&
+            data.keys().hasOnly(base.concat(checkIn).concat(['mealEnjoyment', 'mealGroups', 'mood'])) && data.keys().hasAll(base.concat(checkIn)) &&
             data.phase in ['morning', 'day', 'evening'] && entryId == data.dateKey + '-' + data.phase &&
             (data.sleepHours == null || isNumberInRange(data.sleepHours, 0, 24)) &&
             data.meal in ['', 'skipped', 'partial', 'varied'] &&
@@ -481,6 +417,7 @@ service cloud.firestore {
             (!('mealGroups' in data) || (data.mealGroups is list && data.mealGroups.size() <= 4 &&
               data.mealGroups.hasOnly(['staple','protein','vegetables','fruit']))) &&
             data.energy in ['', 'fresh', 'steady', 'tired'] &&
+            (!('mood' in data) || data.mood in ['', 'calm', 'hopeful', 'grateful', 'anxious', 'overwhelmed', 'sad', 'mixed', 'neutral']) &&
             data.note is string && data.note.size() <= 1500 &&
             isIntInRange(data.extraMinutes, 0, 1440)
           ) ||
@@ -535,12 +472,16 @@ service cloud.firestore {
       allow get: if isAdmin() || (hasVerifiedEmail() && request.auth.token.email.lower() == email);
       allow list: if isAdmin();
       allow create: if isAdmin() &&
-        request.resource.data.keys().hasOnly(['email', 'grantedBy', 'createdAt']) &&
+        request.resource.data.keys().hasOnly(['email', 'grantedBy', 'createdAt', 'role']) &&
+        request.resource.data.get('role', 'admin') in ['admin', 'operator', 'auditor'] &&
         request.resource.data.email == email && isNonEmptyString(email, 254) &&
         email == email.lower() && email.matches('[^@ ]+@[^@ ]+[.][^@ ]+') &&
         request.resource.data.grantedBy == request.auth.uid && request.resource.data.createdAt == request.time;
       allow delete: if isAdmin() && request.auth.token.email.lower() != email;
-      allow update: if false;
+      allow update: if isAdmin() && request.auth.token.email.lower() != email &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'updatedBy', 'updatedAt']) &&
+        request.resource.data.role in ['admin', 'operator', 'auditor'] &&
+        request.resource.data.updatedBy == request.auth.uid && request.resource.data.updatedAt == request.time;
     }
 
     // Non-secret public AI configuration (strictly no API keys)
@@ -564,13 +505,14 @@ service cloud.firestore {
 
     // User Account Directory (self-service metadata + admin user management)
     match /users/{userId} {
-      allow get: if isOwner(userId) || isAdmin() || isAIProxy();
-      allow list: if isAdmin();
+      allow get: if isOwner(userId) || isStaff() || isAIProxy();
+      allow list: if isStaff();
       allow create: if isOwner(userId) &&
         uidUnchanged(userId) &&
+        request.resource.data.email == request.auth.token.get('email', '') &&
         isValidUserAccount(request.resource.data, userId) &&
         (isAdmin() || (
-          request.resource.data.role == 'user' &&
+          request.resource.data.role == staffRole() &&
           request.resource.data.status == 'active' &&
           request.resource.data.aiRequestsToday == 0 &&
           request.resource.data.aiTotalRequests == 0 &&
@@ -582,28 +524,27 @@ service cloud.firestore {
         request.resource.data.createdAt == resource.data.createdAt &&
         (isAdmin() || (
           isOwner(userId) &&
-          request.resource.data.role == resource.data.get('role', 'user') &&
+          request.resource.data.email == request.auth.token.get('email', '') &&
+          (request.resource.data.role == resource.data.get('role', 'user') || request.resource.data.role == staffRole()) &&
           request.resource.data.status == resource.data.get('status', 'active') &&
           request.resource.data.aiRequestsToday == resource.data.get('aiRequestsToday', 0) &&
           request.resource.data.aiTotalRequests == resource.data.get('aiTotalRequests', 0) &&
           request.resource.data.aiQuotaDate == resource.data.get('aiQuotaDate', '')
         ));
+      allow update: if staffRole() == 'operator' && !isStaffTarget(userId, resource.data.email) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'aiRequestsToday', 'updatedAt']) &&
+        (request.resource.data.aiRequestsToday == resource.data.aiRequestsToday || request.resource.data.aiRequestsToday == 0) &&
+        isValidUserAccount(request.resource.data, userId);
       allow update: if isAIProxy() &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['aiRequestsToday', 'aiTotalRequests', 'aiQuotaDate']) &&
         isValidUserAccount(request.resource.data, userId);
-      allow delete: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
 
       // Main player profile document (strictly owner-only, docId == 'main', no API keys)
       match /profile/{docId} {
-        allow read: if isOwner(userId) && docId == 'main';
-        allow create: if isOwner(userId) &&
+        allow get: if isOwner(userId) && docId == 'main';
+        allow create, update: if isOwner(userId) &&
           docId == 'main' &&
-          uidUnchanged(userId) &&
-          isValidProfile(request.resource.data, userId);
-        allow update: if isOwner(userId) &&
-          docId == 'main' &&
-          uidNotModified() &&
-          areImmutableFieldsUnchanged(['ownerUid']) &&
           isValidProfile(request.resource.data, userId);
         allow delete: if isOwner(userId) && docId == 'main';
       }
@@ -634,7 +575,7 @@ service cloud.firestore {
 
     // Server-written AI usage audit logs (admin read-only)
     match /aiUsageLogs/{logId} {
-      allow get, list: if isAdmin();
+      allow get, list: if canAuditAI();
       allow create: if isAIProxy() &&
         request.resource.data.keys().hasOnly(['uid', 'email', 'feature', 'model', 'status', 'latencyMs', 'createdAt']) &&
         isNonEmptyString(request.resource.data.uid, 128) &&

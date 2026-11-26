@@ -1,3 +1,4 @@
+import type { AdminRole } from './engine/access';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import type {
@@ -47,6 +48,7 @@ import {
   deleteProfileFromCloud,
   fetchRecentDailyLogs,
   initFirebaseFromConfig,
+  initializeCloudProfile,
   isFirebaseReady,
   saveDailyLogToCloud,
   saveProfileToCloud,
@@ -54,6 +56,7 @@ import {
   subscribeProfileFromCloud,
   subscribeSharedAIPublicConfig,
   upsertUserMeta,
+  watchAdminAccess,
 } from './services/firebaseService';
 import { splitRoadmapTasks } from './services/aiService';
 import { Header } from './components/Header';
@@ -64,9 +67,10 @@ import { AwakeningView } from './components/AwakeningView';
 import { getActiveDreamStep, getCurrentDreamSteps, getRoadmapActions, planDailyFocus, type DailyTaskSuggestion } from './engine/coaching';
 import type { CalendarEvent } from './services/googleCalendar';
 import { CareerCoach, CoachSetupModal, GymCoach } from './components/CoachPanels';
-import { BodyConditionPanel, DailyCheckInModal, NutritionPanel } from './components/JournalPanels';
-import { getDailyEvidence, getGrowthActions, getJournalMoment, type CheckIn, type CheckInInput, type DayPhase } from './engine/journal';
-import { useJournal } from './services/useJournal';
+import { BodyConditionPanel, DailyCheckInModal, DailyReflectionCard, NutritionPanel } from './components/JournalPanels';
+import { getDailyEvidence, getGrowthActions, getJournalMoment, mergeJournal, type CheckIn, type CheckInInput, type DayPhase } from './engine/journal';
+import { createDailyReflection } from './engine/reflection';
+import { loadGuestJournal, useJournal } from './services/useJournal';
 import { avatarOwnerKey, deleteAvatarPhoto } from './services/avatarStorage';
 import {
   DailyTasksPanel,
@@ -143,7 +147,9 @@ export default function App() {
   const [isAdminView, setIsAdminView] = useState<boolean>(
     () => isDedicatedAdminHost || isAdminPath(window.location.pathname)
   );
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminRole, setAdminRole] = useState<AdminRole | null>(null);
+  const [adminAccessReady, setAdminAccessReady] = useState(false);
+  const isAdmin = Boolean(adminRole);
   const [isUnverifiedBootstrapAdmin, setIsUnverifiedBootstrapAdmin] = useState(false);
   const [sharedAIConfig, setSharedAIConfig] = useState<SharedAIPublicConfig | null>(null);
 
@@ -155,6 +161,8 @@ export default function App() {
   const journal = useJournal(isAdminView ? undefined : cloudUser?.uid);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('local');
   const [firebaseVersion, setFirebaseVersion] = useState(0);
+  const [cloudProfileReady, setCloudProfileReady] = useState(false);
+  const [savingNewProfile, setSavingNewProfile] = useState(false);
 
   // PWA Install Prompt
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -166,7 +174,7 @@ export default function App() {
   langRef.current = lang;
   const cloudUserRef = useRef<User | null>(cloudUser);
   cloudUserRef.current = cloudUser;
-  const syncTimerRef = useRef<number | null>(null);
+  const profileWrite = useRef(0);
 
   const notify = useCallback(
     (message: string, type: ToastItem['type'] = 'info') => {
@@ -234,7 +242,7 @@ export default function App() {
       if (cloudUserRef.current) setSyncStatus('offline');
     };
     const handleOnline = () => {
-      if (cloudUserRef.current) setSyncStatus('synced');
+      if (cloudUserRef.current) setSyncStatus('syncing');
     };
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
@@ -245,33 +253,20 @@ export default function App() {
   }, []);
 
   const commitPlayerChange = useCallback((next: PlayerProfile) => {
+    const uid = cloudUserRef.current?.uid;
     playerRef.current = next;
     setPlayer(next);
-    saveLocalPlayer(next);
-
-    const uid = cloudUserRef.current?.uid;
+    saveLocalPlayer(next, uid);
     if (!uid) return;
 
-    if (!navigator.onLine) {
-      setSyncStatus('offline');
-    } else {
-      setSyncStatus('syncing');
-    }
-
-    if (syncTimerRef.current) {
-      window.clearTimeout(syncTimerRef.current);
-    }
-
-    syncTimerRef.current = window.setTimeout(() => {
-      saveProfileToCloud(uid, next)
-        .then(() => {
-          setSyncStatus(navigator.onLine ? 'synced' : 'offline');
-        })
-        .catch((err) => {
-          console.error('[Cloud Sync] Write error:', err);
-          setSyncStatus('error');
-        });
-    }, 350);
+    const revision = ++profileWrite.current;
+    setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
+    void saveProfileToCloud(uid, next).then(() => {
+      if (profileWrite.current === revision && cloudUserRef.current?.uid === uid) setSyncStatus('synced');
+    }).catch((error) => {
+      console.error('[Cloud Sync] Write error:', error);
+      if (profileWrite.current === revision && cloudUserRef.current?.uid === uid) setSyncStatus('error');
+    });
   }, []);
 
   // Initialize Firebase, Auth Listener, Admin Detection & Shared AI Config
@@ -279,6 +274,7 @@ export default function App() {
     let unsubAuth: (() => void) | null = null;
     let unsubProfile: (() => void) | null = null;
     let unsubSharedAI: (() => void) | null = null;
+    let unsubRole: (() => void) | null = null;
     let cancelled = false;
     let activeUid: string | undefined;
 
@@ -286,8 +282,15 @@ export default function App() {
       const ready = await initFirebaseFromConfig();
       if (cancelled) return;
       if (!ready) {
+        cloudUserRef.current = null;
         setCloudUser(null);
-        setIsAdmin(false);
+        setCloudProfileReady(false);
+        const guest = loadLocalPlayer(langRef.current);
+        playerRef.current = guest;
+        setPlayer(guest);
+        setDailyLogs(loadLocalLogs());
+        setAdminRole(null);
+        setAdminAccessReady(true);
         setIsUnverifiedBootstrapAdmin(false);
         setSyncStatus('local');
         setAuthResolved(true);
@@ -297,13 +300,24 @@ export default function App() {
       setSyncStatus('connecting');
       unsubAuth = subscribeAuth((user) => {
         if (cancelled) return;
+        cloudUserRef.current = user;
         setCloudUser(user);
-        setIsAdmin(false);
+        setAdminRole(null);
+        setAdminAccessReady(!user);
         setIsUnverifiedBootstrapAdmin(false);
         activeUid = user?.uid;
+        const local = loadLocalPlayer(langRef.current, activeUid);
+        playerRef.current = local;
+        setPlayer(local);
         setDailyLogs(loadLocalLogs(activeUid));
+        setCloudProfileReady(false);
+        setSavingNewProfile(false);
+        setModal(null);
+        profileWrite.current++;
         setAuthResolved(true);
 
+        unsubRole?.();
+        unsubRole = null;
         if (unsubProfile) {
           unsubProfile();
           unsubProfile = null;
@@ -314,7 +328,7 @@ export default function App() {
         }
 
         if (!user) {
-          setIsAdmin(false);
+          setAdminRole(null);
           setIsUnverifiedBootstrapAdmin(false);
           setSharedAIConfig(null);
           setSyncStatus('local');
@@ -327,9 +341,15 @@ export default function App() {
         // Check Admin privileges & register/update user directory doc
         void checkIsUserAdmin(user).then((adminStatus) => {
           if (cancelled || activeUid !== user.uid) return;
-          setIsAdmin(adminStatus.isAdmin);
+          setAdminRole(adminStatus.role);
+          setAdminAccessReady(true);
           setIsUnverifiedBootstrapAdmin(adminStatus.isUnverifiedBootstrapAdmin);
-          void upsertUserMeta(user, langRef.current, adminStatus.isAdmin).catch(() => {});
+          void upsertUserMeta(user, langRef.current, adminStatus.role).catch(() => {});
+          unsubRole = watchAdminAccess(user, (role) => {
+            if (cancelled || activeUid !== user.uid) return;
+            setAdminRole(role);
+            if (role !== adminStatus.role) void upsertUserMeta(user, langRef.current, role).catch(() => {});
+          });
         });
 
         // Subscribe to Admin-configured Shared AI public status
@@ -348,28 +368,26 @@ export default function App() {
           })
           .catch(() => {});
 
-        let firstSnapshotHandled = false;
         unsubProfile = subscribeProfileFromCloud(
           user.uid,
           langRef.current,
-          (remoteProfile, fromCache) => {
-            if (cancelled) return;
-            if (remoteProfile) {
-              setPlayer(remoteProfile);
-              saveLocalPlayer(remoteProfile);
-              setSyncStatus(fromCache && !navigator.onLine ? 'offline' : 'synced');
-            } else if (!firstSnapshotHandled && playerRef.current) {
-              void saveProfileToCloud(user.uid, playerRef.current)
-                .then(() => setSyncStatus('synced'))
-                .catch(() => setSyncStatus('error'));
-            } else {
-              setSyncStatus('synced');
+          (remoteProfile, { fromCache, hasPendingWrites }) => {
+            if (cancelled || activeUid !== user.uid) return;
+            if (hasPendingWrites) {
+              setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
+              return;
             }
-            firstSnapshotHandled = true;
+            // An empty browser cache does not mean the account lacks a profile.
+            if (fromCache && (!remoteProfile || playerRef.current)) return;
+            playerRef.current = remoteProfile;
+            setPlayer(remoteProfile);
+            saveLocalPlayer(remoteProfile, user.uid);
+            if (!fromCache) setCloudProfileReady(true);
+            setSyncStatus(fromCache ? (navigator.onLine ? 'syncing' : 'offline') : 'synced');
           },
           (err) => {
             console.error('[Cloud Sync] Snapshot error:', err);
-            if (!cancelled) setSyncStatus('error');
+            if (!cancelled && activeUid === user.uid) setSyncStatus('error');
           }
         );
       });
@@ -382,6 +400,7 @@ export default function App() {
       if (unsubAuth) unsubAuth();
       if (unsubProfile) unsubProfile();
       if (unsubSharedAI) unsubSharedAI();
+      unsubRole?.();
     };
   }, [firebaseVersion]);
 
@@ -402,7 +421,7 @@ export default function App() {
       commitPlayerChange({ ...player, bio: updatedBio });
     }
     if (cloudUser) {
-      void upsertUserMeta(cloudUser, nextLang, isAdmin).catch(() => {});
+      void upsertUserMeta(cloudUser, nextLang, adminRole).catch(() => {});
     }
   };
 
@@ -455,18 +474,47 @@ export default function App() {
     }
   };
 
-  const handleCompleteAwakening = (input: CreateProfileInput) => {
-    const created = createInitialPlayerProfile(input);
-    commitPlayerChange(created);
+  const startProfile = async (created: PlayerProfile, recoverDevice = false) => {
+    const uid = cloudUserRef.current?.uid;
+    if (uid) {
+      if (!cloudProfileReady || savingNewProfile) return;
+      setSavingNewProfile(true);
+      try {
+        const history = recoverDevice ? { logs: loadLocalLogs(), journal: loadGuestJournal() } : undefined;
+        const createdOnServer = await initializeCloudProfile(uid, created, history);
+        if (!createdOnServer || cloudUserRef.current?.uid !== uid) return;
+        if (history) {
+          const logs = await fetchRecentDailyLogs(uid, 60).catch(() => null);
+          if (logs && cloudUserRef.current?.uid === uid) {
+            saveLocalLogs(logs, uid);
+            setDailyLogs(logs);
+          }
+        }
+      } catch (error) {
+        console.error('[Cloud Sync] Profile initialization failed:', error);
+        notify(lang === 'id' ? 'Profil belum tersimpan ke akun. Coba lagi saat terhubung.' : 'The profile could not be saved to your account. Try again when connected.', 'error');
+        return;
+      } finally {
+        if (cloudUserRef.current?.uid === uid) setSavingNewProfile(false);
+      }
+      if (cloudUserRef.current?.uid !== uid) return;
+      // The profile listener supplies the saved account document.
+    } else {
+      commitPlayerChange(created);
+    }
     setMobileTab('status');
-    notify(
-      lang === 'id'
-        ? `Selamat datang ${created.name}! Peta Impian menuju Level ${created.targetLevel} siap!`
-        : `Welcome ${created.name}! Your Dream Roadmap to Level ${created.targetLevel} is ready!`,
-      'success'
-    );
-    void runTaskBreakdown(created, true);
+    notify(lang === 'id' ? `Profil ${created.name} siap dipakai.` : `${created.name}’s profile is ready.`, 'success');
+    if (!recoverDevice) {
+      if (uid && !playerRef.current) {
+        playerRef.current = created;
+        setPlayer(created);
+        saveLocalPlayer(created, uid);
+      }
+      void runTaskBreakdown(created, true);
+    }
   };
+
+  const handleCompleteAwakening = (input: CreateProfileInput) => void startProfile(createInitialPlayerProfile(input));
 
   // =========================================================================
   // GAMEPLAY & PROGRESS HANDLERS
@@ -746,7 +794,8 @@ export default function App() {
   };
 
   const handleResetProfile = async () => {
-    saveLocalPlayer(null);
+    saveLocalPlayer(null, cloudUserRef.current?.uid);
+    playerRef.current = null;
     setPlayer(null);
     setModal(null);
     await deleteAvatarPhoto(avatarOwnerKey(cloudUser?.uid)).catch(() => {});
@@ -781,7 +830,7 @@ export default function App() {
   };
 
   const handleForceCloudSync = async () => {
-    if (!cloudUser || !player) return;
+    if (!cloudUser || !player || !cloudProfileReady) return;
     setSyncStatus('syncing');
     try {
       await saveProfileToCloud(cloudUser.uid, player);
@@ -893,7 +942,9 @@ export default function App() {
   }, [isPlayerReady, hasCheckIn, modal, journal.key, currentCheckInId, dateKey, phase, missingGym]);
 
   const evidence = getDailyEvidence(journal.records, dailyLogs, dateKey, player?.age ?? 18);
-  const focus = player ? planDailyFocus(player, evidence, agenda?.owner === journal.key ? agenda.events : [], phase, now, lang) : null;
+  const calendarEvents = agenda?.owner === journal.key ? agenda.events : [];
+  const focus = player ? planDailyFocus(player, evidence, calendarEvents, phase, now, lang) : null;
+  const reflection = player ? createDailyReflection({ owner: journal.key, player, evidence, events: calendarEvents, dateKey, phase, now, lang }) : null;
   const updateAgenda = useCallback((owner: string, events: CalendarEvent[]) => setAgenda({ owner, events }), []);
   const addCoachQuest = (quest: Quest) => {
     const current = playerRef.current;
@@ -932,6 +983,8 @@ export default function App() {
   const pendingTasksCount = player ? player.quests.filter((q) => !q.completed).length : 0;
 
   // Determine whether to show Auth Gate screen
+  const awaitingCloudProfile = Boolean(cloudUser && !isAdminView && !player && !cloudProfileReady);
+  const availableDeviceProfile = cloudUser && cloudProfileReady && !player ? loadLocalPlayer(lang) : null;
   const shouldShowAuthGate =
     isFirebaseReady() &&
     authResolved &&
@@ -992,11 +1045,15 @@ export default function App() {
             }}
             onNotify={notify}
           />
+        ) : isAdminView && !adminAccessReady ? (
+          <p role="status" className="py-12 text-center text-sm text-slate-700">
+            {lang === 'id' ? 'Memeriksa izin admin…' : 'Checking admin access…'}
+          </p>
         ) : isAdminView ? (
           <AdminDashboard
             lang={lang}
             cloudUser={cloudUser}
-            isAdmin={isAdmin}
+            adminRole={adminRole}
             isUnverifiedBootstrapAdmin={isUnverifiedBootstrapAdmin}
             proxyBaseUrl={aiConfig.proxyBaseUrl || ''}
             onSaveProxyBaseUrl={(url) =>
@@ -1005,18 +1062,42 @@ export default function App() {
             onBackToApp={() => navigateAdminView(false)}
             onNotify={notify}
           />
+        ) : awaitingCloudProfile || savingNewProfile ? (
+          <section role="status" className="anime-panel mx-auto max-w-md space-y-3 p-5 text-center">
+            <p className="font-bold">{syncStatus === 'error'
+              ? (lang === 'id' ? 'Profil akun belum bisa dibuka' : 'Could not load your account profile')
+              : (lang === 'id' ? 'Memuat profil akunmu…' : 'Loading your account profile…')}</p>
+            <p className="text-xs text-slate-600">{lang === 'id'
+              ? 'Level Up mengambil data akun yang tersimpan sebelum menampilkan profil.'
+              : 'Level Up checks your saved account data before opening the profile.'}</p>
+            {syncStatus === 'error' && <button type="button" className="rounded bg-slate-900 px-3 py-2 text-xs text-white"
+              onClick={() => setFirebaseVersion((version) => version + 1)}>{lang === 'id' ? 'Coba lagi' : 'Try again'}</button>}
+          </section>
         ) : !player ? (
-          <AwakeningView
-            lang={lang}
-            isCloudLoggedIn={Boolean(cloudUser)}
-            onOpenCloudLogin={() => setShowAuthScreen(true)}
-            onCompleteAwakening={handleCompleteAwakening}
-          />
+          <div className="space-y-4">
+            {availableDeviceProfile && <section className="anime-panel mx-auto max-w-3xl space-y-2 p-4 text-sm">
+              <p className="font-semibold">{lang === 'id' ? 'Pakai profil yang tersimpan di perangkat ini?' : 'Use a profile from this device?'}</p>
+              <p className="text-xs text-slate-600">{lang === 'id'
+                ? `Akun ini belum punya profil Cloud. Jika “${availableDeviceProfile.name}” milikmu, sambungkan profil dan catatan perangkat ini ke akunmu.`
+                : `This account has no cloud profile yet. If “${availableDeviceProfile.name}” is yours, connect this device’s profile and records to your account.`}</p>
+              <button type="button" className="rounded bg-slate-900 px-3 py-2 text-xs font-bold text-white"
+                onClick={() => void startProfile(availableDeviceProfile, true)}>{lang === 'id' ? 'Sinkronkan profil perangkat ini' : 'Sync this device’s profile'}</button>
+            </section>}
+            <AwakeningView
+              lang={lang}
+              isCloudLoggedIn={Boolean(cloudUser)}
+              onOpenCloudLogin={() => setShowAuthScreen(true)}
+              onCompleteAwakening={handleCompleteAwakening}
+            />
+          </div>
         ) : (
           <section className="space-y-5">
             {journal.syncError && <p role="status" className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
               {lang === 'id' ? 'Jurnal tersimpan di perangkat. Sinkronisasi Cloud sedang bermasalah.' : 'Journal is on this device. Cloud sync is currently unavailable.'}
             </p>}
+            {reflection && <div className={mobileTab === 'status' ? 'block' : 'hidden lg:block'}>
+              <DailyReflectionCard lang={lang} reflection={reflection} />
+            </div>}
             {/* ROW 1: STATUS | NUTRITION | ENERGY */}
             <div
               className={`${
@@ -1344,7 +1425,13 @@ export default function App() {
         const id = modal.dateKey + '-' + modal.phase;
         const saved = journal.records.find((entry): entry is CheckIn => entry.kind === 'checkin' && entry.id === id);
         return <DailyCheckInModal key={journal.key + id} name={player.name} lang={lang} phase={modal.phase} initial={saved}
-          photoKey={'meal:' + journal.key + ':' + id} evidence={getDailyEvidence(journal.records, dailyLogs, modal.dateKey, player.age)} onSave={saveCheckIn} onClose={() => setModal(null)} />;
+          photoKey={'meal:' + journal.key + ':' + id} evidence={getDailyEvidence(journal.records, dailyLogs, modal.dateKey, player.age)}
+          previewReflection={(input) => {
+            const draft: CheckIn = { ...input, id, dateKey: modal.dateKey, phase: modal.phase, kind: 'checkin', updatedAt: Date.now() };
+            return createDailyReflection({ owner: journal.key, player, dateKey: modal.dateKey, phase: modal.phase, now, lang,
+              events: calendarEvents, evidence: getDailyEvidence(mergeJournal(journal.records, [draft]), dailyLogs, modal.dateKey, player.age) });
+          }}
+          onSave={saveCheckIn} onClose={() => setModal(null)} />;
       })()}
 
       {modal?.type === 'completeDay' && player && (

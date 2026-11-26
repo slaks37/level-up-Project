@@ -1,8 +1,9 @@
 import { useEffect, useState, type ChangeEvent } from 'react';
-import { Activity, Camera, ClipboardList, ImagePlus, Moon, UserRound, Utensils } from 'lucide-react';
+import { Activity, BookOpen, Camera, ClipboardList, ImagePlus, Moon, UserRound, Utensils } from 'lucide-react';
 import { ModalShell } from './Modals';
 import type { Language } from '../types';
-import { journalEncouragement, type CheckInInput, type DailyEvidence, type DayPhase } from '../engine/journal';
+import type { CheckInInput, DailyEvidence, DayPhase, Mood } from '../engine/journal';
+import type { DailyReflection } from '../engine/reflection';
 import { deleteAvatarPhoto, loadAvatarPhoto, saveAvatarPhoto } from '../services/avatarStorage';
 import { imageForLocalJournal } from '../services/localPhoto';
 import { tr } from '../data/i18n';
@@ -23,6 +24,39 @@ const ENERGY = {
   steady: { id: 'Biasa saja', en: 'Steady' },
   tired: { id: 'Lelah', en: 'Tired' },
 };
+const MOODS: Record<Mood, Record<Language, string>> = {
+  '': { id: 'Pilih kalau ingin berbagi', en: 'Choose if you feel like sharing' },
+  calm: { id: 'Tenang', en: 'Calm' },
+  hopeful: { id: 'Penuh harapan', en: 'Hopeful' },
+  grateful: { id: 'Bersyukur', en: 'Grateful' },
+  anxious: { id: 'Cemas', en: 'Anxious' },
+  overwhelmed: { id: 'Kewalahan', en: 'Overwhelmed' },
+  sad: { id: 'Sedih', en: 'Sad' },
+  mixed: { id: 'Campur aduk', en: 'Mixed' },
+  neutral: { id: 'Biasa saja', en: 'Neutral' },
+};
+
+export function DailyReflectionCard({ reflection, lang, compact = false }: {
+  reflection: DailyReflection; lang: Language; compact?: boolean;
+}) {
+  const id = lang === 'id';
+  return <section className={compact ? 'rounded-lg border border-indigo-200 bg-indigo-50/70' : 'anime-panel overflow-hidden border-indigo-200'}>
+    <div className="flex items-center gap-2 border-b border-indigo-100 bg-indigo-50 px-4 py-2.5 text-indigo-950">
+      <BookOpen aria-hidden="true" className="size-4 shrink-0 text-indigo-700" />
+      <h2 className="font-hud text-sm font-bold">{id ? 'Renungan hari ini' : 'Today’s reflection'}</h2>
+    </div>
+    <div className={`grid gap-3 break-words px-4 py-3 text-xs leading-relaxed ${compact ? '' : 'md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] md:gap-5'}`}>
+      <div className="min-w-0 space-y-2">
+        <p className="text-slate-800">{reflection.message}</p>
+        <p className="font-semibold text-indigo-950">{reflection.question}</p>
+      </div>
+      <div className="min-w-0 rounded border border-indigo-100 bg-white px-3 py-2 text-slate-800">
+        <h3 className="mb-1 font-bold text-indigo-950">{id ? 'Bahan doa' : 'A prayer for today'}</h3>
+        <p>{reflection.prayer}</p>
+      </div>
+    </div>
+  </section>;
+}
 
 const mealGroupLabels: Record<string, Record<Language, string>> = {
   staple: { id: 'Makanan pokok', en: 'Staple food' },
@@ -143,7 +177,6 @@ export function BodyConditionPanel({ owner, evidence, phase, lang, coreCharge, o
             {evidence.completed.length > 4 && <button className="mt-1 underline" type="button" onClick={onOpen}>{id ? 'Lihat semua aktivitas' : 'See all activity'}</button>}
           </div>
         )}
-        <p className="text-xs leading-relaxed text-slate-700">{journalEncouragement(evidence, phase, lang)}</p>
         <div className="flex flex-wrap items-center gap-2">
           <label className={`flex cursor-pointer items-center gap-1 ${BUTTON}`}>
             <ImagePlus className="size-3" />
@@ -169,8 +202,9 @@ export function BodyConditionPanel({ owner, evidence, phase, lang, coreCharge, o
   );
 }
 
-export function DailyCheckInModal({ name, phase, lang, evidence, initial, photoKey, onSave, onClose }: {
+export function DailyCheckInModal({ name, phase, lang, evidence, initial, photoKey, previewReflection, onSave, onClose }: {
   name: string; phase: DayPhase; lang: Language; evidence: DailyEvidence; initial?: CheckInInput; photoKey: string;
+  previewReflection: (input: CheckInInput) => DailyReflection;
   onSave: (input: CheckInInput) => void; onClose: () => void;
 }) {
   const id = lang === 'id';
@@ -196,8 +230,13 @@ export function DailyCheckInModal({ name, phase, lang, evidence, initial, photoK
   }, [storedPhoto]);
 
   const [energy, setEnergy] = useState(initial?.energy ?? evidence.energy);
+  const [mood, setMood] = useState<Mood>(initial?.mood ?? '');
   const [note, setNote] = useState(initial?.note ?? '');
   const [minutes, setMinutes] = useState(String(initial?.extraMinutes ?? ''));
+  const draft: CheckInInput = {
+    sleepHours: sleep === '' ? null : Number(sleep), meal, mealNote: mealNote.trim(), mealEnjoyment, mealGroups,
+    energy, mood, note: note.trim(), extraMinutes: phase === 'morning' ? 0 : Number(minutes) || 0,
+  };
   const title = phase === 'morning' ? (id ? `Selamat pagi, ${name}` : `Good morning, ${name}`) :
     phase === 'day' ? (id ? `Halo, ${name}` : `Hello, ${name}`) : (id ? `Selamat malam, ${name}` : `Good evening, ${name}`);
   const prompt = phase === 'morning' ? (id ? 'Apa kabar? Apa yang ingin kamu kerjakan hari ini?' : 'How are you? What would you like to do today?') :
@@ -207,9 +246,16 @@ export function DailyCheckInModal({ name, phase, lang, evidence, initial, photoK
     <ModalShell title={title} icon={<ClipboardList className="size-4 text-sky-700" />} onClose={onClose}>
       <form className="space-y-3" onSubmit={(event) => {
         event.preventDefault();
-        onSave({ sleepHours: sleep === '' ? null : Number(sleep), meal, mealNote: mealNote.trim(), mealEnjoyment, mealGroups, energy, note: note.trim(), extraMinutes: phase === 'morning' ? 0 : Number(minutes) || 0 });
+        onSave(draft);
       }}>
         <p className="text-sm text-slate-700">{prompt}</p>
+        <label className="block space-y-1 text-xs font-semibold">
+          {id ? 'Bagaimana mood kamu hari ini?' : 'How are you feeling today?'}
+          <select className={INPUT} value={mood} onChange={(event) => setMood(event.target.value as Mood)}>
+            {Object.entries(MOODS).map(([value, copy]) => <option key={value} value={value}>{copy[lang]}</option>)}
+          </select>
+        </label>
+        <DailyReflectionCard reflection={previewReflection(draft)} lang={lang} compact />
         {phase !== 'morning' && (
           <div className="rounded border border-sky-200 bg-sky-50 p-3 text-xs text-sky-950">
             <p className="font-bold">{id ? 'Yang sudah tercatat hari ini' : 'What you logged today'}</p>
@@ -275,7 +321,6 @@ export function DailyCheckInModal({ name, phase, lang, evidence, initial, photoK
         {phase !== 'morning' && <label className="block space-y-1 text-xs font-semibold">{id ? 'Durasi aktivitas tambahan (menit)' : 'Extra activity duration (minutes)'}
           <input type="number" inputMode="numeric" min="0" max="1440" step="1" value={minutes} onChange={(event) => setMinutes(event.target.value)} className={INPUT} />
         </label>}
-        <p className="rounded border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">{journalEncouragement(evidence, phase, lang)}</p>
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} className={BUTTON}>{id ? 'Nanti' : 'Later'}</button>
           <button type="submit" className="rounded bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-sky-900">{id ? 'Simpan check-in' : 'Save check-in'}</button>

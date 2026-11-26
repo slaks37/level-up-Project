@@ -13,6 +13,8 @@ function readJournal(key: string): JournalEntry[] {
   }
 }
 
+export const loadGuestJournal = () => readJournal('guest');
+
 function writeJournal(key: string, records: JournalEntry[]) {
   try {
     localStorage.setItem(prefix + key, JSON.stringify(records));
@@ -29,10 +31,14 @@ export function useJournal(uid?: string) {
   useEffect(() => {
     setState({ key, records: readJournal(key), ready: !uid, syncError: false });
     if (!uid) return;
-    return subscribeJournal(uid, (remote) => {
+    return subscribeJournal(uid, (remote, fromCache) => {
       const records = mergeJournal(readJournal(key), remote);
       writeJournal(key, records);
-      setState({ key, records, ready: true, syncError: false });
+      setState((current) => ({
+        key, records,
+        ready: !fromCache || !navigator.onLine || (current.key === key && current.ready),
+        syncError: fromCache && current.key === key && current.syncError,
+      }));
     }, () => setState((current) => current.key === key ? { ...current, ready: true, syncError: true } : current));
   }, [key, uid]);
 

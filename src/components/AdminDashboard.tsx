@@ -1,3 +1,4 @@
+import { adminRoleLabels, assignableAdminRoles, canAuditUsage, canManageRoles, canOperateUsers, type AdminRole, type AssignableAdminRole } from '../engine/access';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
@@ -28,14 +29,13 @@ import type {
   UserAccountRecord,
 } from '../types';
 import {
-  addAdminEmail,
-  fetchAdminEmails,
-  revokeAdminEmail,
+  fetchAdminRoleGrants,
+  setAdminRoleGrant,
+  type AdminRoleGrant,
   fetchAdminAISecret,
   fetchAdminUsageLogs,
   fetchAllUsersForAdmin,
   fetchSharedAIPublicConfig,
-  grantOrRevokeAdmin,
   reloadCurrentUser,
   resetUserDailyQuota,
   saveAdminSharedAIConfig,
@@ -54,7 +54,7 @@ import {
 interface AdminDashboardProps {
   lang: Language;
   cloudUser: User | null;
-  isAdmin: boolean;
+  adminRole: AdminRole | null;
   isUnverifiedBootstrapAdmin: boolean;
   proxyBaseUrl: string;
   onSaveProxyBaseUrl: (url: string) => void;
@@ -65,13 +65,16 @@ interface AdminDashboardProps {
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   lang,
   cloudUser,
-  isAdmin,
+  adminRole,
   isUnverifiedBootstrapAdmin,
   proxyBaseUrl,
   onSaveProxyBaseUrl,
   onBackToApp,
   onNotify,
 }) => {
+  const canConfigure = canManageRoles(adminRole);
+  const canOperate = canOperateUsers(adminRole);
+  const canAudit = canAuditUsage(adminRole);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -92,17 +95,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Users & Logs state
   const [users, setUsers] = useState<UserAccountRecord[]>([]);
   const [adminEmail, setAdminEmail] = useState('');
-  const [adminEmails, setAdminEmails] = useState<string[]>([]);
+  const [roleToAssign, setRoleToAssign] = useState<AssignableAdminRole>('operator');
+  const [roleGrants, setRoleGrants] = useState<AdminRoleGrant[]>([]);
+  const [loadingRoles, setLoadingRoles] = useState(canConfigure);
+  const [roleError, setRoleError] = useState(false);
   const [savingAccess, setSavingAccess] = useState(false);
-  const changeAdminEmail = async (email: string, add: boolean) => {
-    if (!cloudUser || !isAdmin || savingAccess) return;
+  const changeAdminRole = async (email: string, role: AssignableAdminRole | null) => {
+    if (!cloudUser || !canConfigure || savingAccess) return;
     setSavingAccess(true);
     try {
-      if (add) {
-        await addAdminEmail(cloudUser, email);
-        setAdminEmail('');
-      } else await revokeAdminEmail(email);
-      setAdminEmails(await fetchAdminEmails());
+      await setAdminRoleGrant(cloudUser, email, role);
+      const normalized = email.trim().toLowerCase();
+      setRoleGrants((current) => {
+        const next = current.filter((entry) => entry.email !== normalized);
+        if (role) next.push({ email: normalized, role });
+        return next.sort((left, right) => left.email.localeCompare(right.email));
+      });
+      if (normalized === adminEmail.trim().toLowerCase()) setAdminEmail('');
       onNotify(lang === 'id' ? 'Akses admin diperbarui.' : 'Admin access updated.', 'success');
     } catch (error) {
       onNotify(error instanceof Error ? error.message : String(error), 'error');
@@ -111,11 +120,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
   useEffect(() => {
-    if (!isAdmin || !cloudUser) return;
+    if (!canConfigure || !cloudUser) return;
     let active = true;
-    void fetchAdminEmails().then((emails) => { if (active) setAdminEmails(emails); }).catch(() => {});
+    setLoadingRoles(true);
+    setRoleError(false);
+    void fetchAdminRoleGrants().then((grants) => { if (active) setRoleGrants(grants); })
+      .catch(() => { if (active) setRoleError(true); }).finally(() => { if (active) setLoadingRoles(false); });
     return () => { active = false; };
-  }, [cloudUser, isAdmin]);
+  }, [cloudUser, canConfigure]);
   const [userSearch, setUserSearch] = useState('');
   const [usageLogs, setUsageLogs] = useState<AIUsageLogRecord[]>([]);
   const [publicCfg, setPublicCfg] = useState<SharedAIPublicConfig | null>(null);
@@ -123,7 +135,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadAdminData = useCallback(async () => {
-    if (!cloudUser || !isAdmin) {
+    if (!cloudUser || !adminRole) {
       setLoading(false);
       return;
     }
@@ -137,15 +149,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           errors.push(`appConfig: ${e instanceof Error ? e.message : String(e)}`);
           return null;
         }),
-        fetchAdminAISecret().catch((e) => {
+        canConfigure ? fetchAdminAISecret().catch((e) => {
           errors.push(`adminSecrets: ${e instanceof Error ? e.message : String(e)}`);
           return null;
-        }),
+        }) : Promise.resolve(null),
         fetchAllUsersForAdmin().catch((e) => {
           errors.push(`users: ${e instanceof Error ? e.message : String(e)}`);
           return [];
         }),
-        fetchAdminUsageLogs(40).catch(() => []),
+        canAudit ? fetchAdminUsageLogs(40).catch(() => []) : Promise.resolve([]),
         checkProxyServerHealth(localProxyUrl).catch(() => null),
       ]);
       if (errors.length > 0) setLoadError(errors.join(' | '));
@@ -172,7 +184,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       // Also check live Express Proxy config & logs if online
-      if (health?.ok) {
+      if (health?.ok && canConfigure) {
         const idToken = await cloudUser.getIdToken();
         const serverCfg = await fetchProxyAdminConfig(localProxyUrl, idToken).catch(() => null);
         if (serverCfg) {
@@ -193,7 +205,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [cloudUser, isAdmin, localProxyUrl]);
+  }, [cloudUser, adminRole, canConfigure, canAudit, localProxyUrl]);
 
   useEffect(() => {
     void loadAdminData();
@@ -201,7 +213,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleSaveSharedConfig = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!cloudUser || !isAdmin) return;
+    if (!cloudUser || !canConfigure) return;
     setSaving(true);
     setTestResult(null);
 
@@ -262,6 +274,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleToggleUserStatus = async (target: UserAccountRecord) => {
+    if (!canOperate) return;
     const nextStatus = target.status === 'suspended' ? 'active' : 'suspended';
     try {
       await updateUserStatusByAdmin(target.ownerUid, nextStatus);
@@ -278,6 +291,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleResetQuota = async (target: UserAccountRecord) => {
+    if (!canOperate) return;
     try {
       await resetUserDailyQuota(target.ownerUid);
       setUsers((prev) =>
@@ -287,34 +301,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         lang === 'id'
           ? `Kuota harian ${target.email} direset ke 0.`
           : `Reset daily quota for ${target.email}.`,
-        'success'
-      );
-    } catch (err) {
-      onNotify(err instanceof Error ? err.message : String(err), 'error');
-    }
-  };
-
-  const handleToggleAdmin = async (target: UserAccountRecord) => {
-    if (!cloudUser) return;
-    if (target.ownerUid === cloudUser.uid) {
-      onNotify(
-        lang === 'id' ? 'Tidak bisa mencabut akses Admin milikmu sendiri.' : 'Cannot revoke your own admin role.',
-        'warning'
-      );
-      return;
-    }
-    const makeAdmin = target.role !== 'admin';
-    try {
-      await grantOrRevokeAdmin(cloudUser, target, makeAdmin);
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.ownerUid === target.ownerUid ? { ...u, role: makeAdmin ? 'admin' : 'user' } : u
-        )
-      );
-      onNotify(
-        makeAdmin
-          ? `${target.email} diangkat menjadi ADMIN.`
-          : `Hak admin ${target.email} dicabut.`,
         'success'
       );
     } catch (err) {
@@ -339,7 +325,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  if (!cloudUser || (!isAdmin && !isUnverifiedBootstrapAdmin)) {
+  if (!cloudUser || (!adminRole && !isUnverifiedBootstrapAdmin)) {
     return (
       <section className="max-w-lg mx-auto py-8">
         <div className="anime-panel p-6 text-center space-y-3">
@@ -364,7 +350,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
   }
 
-  if (isUnverifiedBootstrapAdmin && !isAdmin) {
+  if (isUnverifiedBootstrapAdmin && !adminRole) {
     return (
       <section className="max-w-lg mx-auto py-8">
         <div className="anime-panel p-6 space-y-4">
@@ -451,7 +437,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <span>ADMIN CONTROL CENTER</span>
             </h1>
             <p className="font-mono text-[10px] text-slate-500">
-              Super Admin: {cloudUser.email}
+              {adminRole ? adminRoleLabels[adminRole] : ''} · {cloudUser.email}
             </p>
           </div>
         </div>
@@ -534,22 +520,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Main Grid: Shared AI Config + Audit Logs */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        <section className="lg:col-span-12 anime-panel overflow-hidden">
-          <div className="blender-bar px-4 py-2 font-mono text-xs font-bold">{lang === 'id' ? 'EMAIL DENGAN AKSES ADMIN' : 'ADMIN EMAIL ACCESS'}</div>
-          <div className="space-y-2 p-4">
-            <p className="text-xs text-slate-600">{lang === 'id' ? 'Email yang ditambahkan harus punya akun Level Up dan sudah terverifikasi sebelum masuk.' : 'An invited email needs a verified Level Up account to sign in.'}</p>
-            <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); void changeAdminEmail(adminEmail, true); }}>
-              <input type="email" required maxLength={254} aria-label="Email admin" value={adminEmail} onChange={(event) => setAdminEmail(event.target.value)} className="min-w-0 rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="nama@contoh.com" />
-              <button type="submit" disabled={savingAccess} className="rounded bg-slate-900 px-3 py-1.5 text-xs font-bold text-white">{lang === 'id' ? 'Tambahkan email' : 'Add email'}</button>
+        {canConfigure && <section className="lg:col-span-12 anime-panel overflow-hidden">
+          <h2 className="blender-bar px-4 py-2 font-mono text-xs font-bold">{lang === 'id' ? 'PERAN & IZIN ADMIN' : 'ADMIN ROLES & PERMISSIONS'}</h2>
+          <div className="space-y-4 p-4 text-xs">
+            <dl className="grid gap-2 sm:grid-cols-3">
+              {[
+                { label: 'Admin', id: 'Kelola peran, pengguna, kuota, audit, dan konfigurasi Agnes.', en: 'Manage roles, users, quota, audit, and Agnes settings.' },
+                { label: 'Operator', id: 'Kelola status dan reset kuota akun player.', en: 'Manage player status and reset player quotas.' },
+                { label: 'Auditor', id: 'Baca direktori pengguna dan log penggunaan AI.', en: 'Read the user directory and AI usage logs.' },
+              ].map((role) => <div className="rounded border border-slate-200 bg-slate-50 p-2" key={role.label}>
+                <dt className="font-semibold">{role.label}</dt><dd className="mt-0.5 text-slate-700">{role[lang]}</dd>
+              </div>)}
+            </dl>
+            <p className="text-slate-600">{lang === 'id' ? 'Akses aktif saat email tersebut masuk dengan akun Level Up yang telah terverifikasi.' : 'The email gains access once it signs in with a verified Level Up account.'}</p>
+            <form className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_auto]" onSubmit={(event) => {
+              event.preventDefault();
+              void changeAdminRole(adminEmail, roleToAssign);
+            }}>
+              <input type="email" required maxLength={254} aria-label={lang === 'id' ? 'Email untuk akses admin' : 'Email for admin access'} value={adminEmail}
+                onChange={(event) => setAdminEmail(event.target.value)} className="rounded border border-slate-300 px-2 py-2 text-sm" placeholder="nama@contoh.com" />
+              <select aria-label={lang === 'id' ? 'Pilih peran' : 'Choose a role'} value={roleToAssign}
+                onChange={(event) => setRoleToAssign(event.target.value as AssignableAdminRole)} className="rounded border border-slate-300 px-2 py-2">
+                {assignableAdminRoles.map((role) => <option key={role} value={role}>{adminRoleLabels[role]}</option>)}
+              </select>
+              <button type="submit" disabled={savingAccess || loadingRoles} className="rounded bg-slate-900 px-3 py-2 font-bold text-white">{lang === 'id' ? 'Simpan peran' : 'Save role'}</button>
             </form>
-            {adminEmails.map((email) => <div key={email} className="flex items-center gap-2 text-xs"><span className="break-all">{email}</span>
-              {cloudUser?.email?.toLowerCase() !== email && <button type="button" disabled={savingAccess} onClick={() => void changeAdminEmail(email, false)} className="text-red-700 underline">{lang === 'id' ? 'Cabut akses' : 'Revoke access'}</button>}
+            {roleError && <p role="alert" className="text-red-700">{lang === 'id' ? 'Daftar peran belum bisa dimuat. Muat ulang halaman.' : 'The role list could not be loaded. Reload the page.'}</p>}
+            {roleGrants.map(({ email, role }) => <div key={email} className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-2">
+              <span className="min-w-0 flex-1 break-all font-medium">{email}</span>
+              {email === cloudUser.email?.toLowerCase() ? <span>{adminRoleLabels[role]}</span> : <>
+                <select aria-label={(lang === 'id' ? 'Peran untuk ' : 'Role for ') + email} value={role} disabled={savingAccess}
+                  onChange={(event) => void changeAdminRole(email, event.target.value as AssignableAdminRole)}
+                  className="rounded border border-slate-300 px-2 py-1">
+                  {assignableAdminRoles.map((option) => <option key={option} value={option}>{adminRoleLabels[option]}</option>)}
+                </select>
+                <button type="button" disabled={savingAccess} onClick={() => void changeAdminRole(email, null)}
+                  className="rounded border border-red-200 px-2 py-1 font-semibold text-red-800">{lang === 'id' ? 'Cabut akses' : 'Revoke access'}</button>
+              </>}
             </div>)}
           </div>
-        </section>
+        </section>}
 
         {/* LEFT: Shared Agnes AI Vault & Proxy Settings (7 cols) */}
-        <div className="lg:col-span-7 anime-panel overflow-hidden">
+        {canConfigure && <div className="lg:col-span-7 anime-panel overflow-hidden">
           <div className="blender-bar px-4 py-2 flex items-center justify-between">
             <span className="font-mono text-[10px] font-bold text-slate-800 flex items-center gap-1.5">
               <KeyRound className="w-3.5 h-3.5 text-orange-600" />
@@ -760,10 +773,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
           </form>
-        </div>
+        </div>}
 
         {/* RIGHT: AI Usage Audit Logs (5 cols) */}
-        <div className="lg:col-span-5 anime-panel overflow-hidden flex flex-col">
+        {canAudit && <div className={`anime-panel flex flex-col overflow-hidden ${canConfigure ? 'lg:col-span-5' : 'lg:col-span-12'}`}>
           <div className="blender-bar px-4 py-2 flex items-center justify-between">
             <span className="font-mono text-[10px] font-bold text-sky-800 flex items-center gap-1.5">
               <Activity className="w-3.5 h-3.5 text-sky-600" />
@@ -810,7 +823,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               ))
             )}
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* User Management Directory */}
@@ -851,8 +864,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredUsers.map((u) => (
-                  <tr key={u.ownerUid} className="hover:bg-slate-50/70">
+                filteredUsers.map((u) => {
+                  const grantRole = canConfigure ? roleGrants.find((grant) => grant.email === u.email.toLowerCase())?.role : undefined;
+                  const displayedRole = grantRole || u.role;
+                  return <tr key={u.ownerUid} className="hover:bg-slate-50/70">
                     <td className="px-4 py-2.5">
                       <p className="font-hud font-bold text-slate-900">{u.displayName}</p>
                       <p className="font-mono text-[10px] text-slate-500">{u.email}</p>
@@ -865,7 +880,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             : 'bg-slate-100 text-slate-700'
                         }`}
                       >
-                        {u.role}
+                        {displayedRole === 'user' ? 'Player' : adminRoleLabels[displayedRole]}
                       </span>
                     </td>
                     <td className="px-3 py-2.5">
@@ -889,7 +904,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center justify-end gap-1.5">
-                        <button
+                        {canOperate && (canConfigure || u.role === 'user') && <><button
                           type="button"
                           onClick={() => void handleResetQuota(u)}
                           className="p-1.5 rounded border border-slate-300 bg-white hover:bg-sky-50 text-sky-700"
@@ -921,26 +936,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <Ban className="w-3.5 h-3.5" />
                           )}
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleToggleAdmin(u)}
-                          className="px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-900 hover:text-orange-400 font-mono text-[10px] font-bold transition"
-                          title={
-                            u.role === 'admin'
-                              ? lang === 'id'
-                                ? 'Cabut Admin'
-                                : 'Revoke Admin'
-                              : lang === 'id'
-                                ? 'Jadikan Admin'
-                                : 'Promote to Admin'
-                          }
-                        >
-                          {u.role === 'admin' ? '-ADM' : '+ADM'}
-                        </button>
+                        </>}
                       </div>
                     </td>
-                  </tr>
-                ))
+                  </tr>;
+                })
               )}
             </tbody>
           </table>

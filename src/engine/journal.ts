@@ -4,6 +4,7 @@ import type { DailyLogEntry, GrowthNewsItem, Language, PlayerProfile, QuestCateg
 export type DayPhase = 'morning' | 'day' | 'evening';
 export type MealPattern = '' | 'skipped' | 'partial' | 'varied';
 export type EnergyFeeling = '' | 'fresh' | 'steady' | 'tired';
+export type Mood = '' | 'calm' | 'hopeful' | 'grateful' | 'anxious' | 'overwhelmed' | 'sad' | 'mixed' | 'neutral';
 export interface CheckInInput {
   sleepHours: number | null;
   meal: MealPattern;
@@ -11,6 +12,7 @@ export interface CheckInInput {
   mealEnjoyment?: 'enjoyed' | 'neutral' | 'did_not_enjoy' | '';
   mealGroups?: string[];
   energy: EnergyFeeling;
+  mood?: Mood;
   note: string;
   extraMinutes: number;
 }
@@ -59,6 +61,7 @@ export function getDailyEvidence(entries: JournalEntry[], logs: DailyLogEntry[],
   const mealGroups = loggedMeal?.mealGroups || [];
   const mealEnjoyment = loggedMeal?.mealEnjoyment || '';
   const energy = latest.find((entry) => entry.energy)?.energy ?? '';
+  const mood = latest.find((entry) => entry.mood)?.mood ?? '';
   const closed = logs.find((entry) => entry.dateKey === dateKey);
   const minutes = (category: QuestCategory, legacy = 0) => Math.max(legacy,
     tasks.filter((task) => task.category === category).reduce((sum, task) => sum + task.minutes, 0));
@@ -86,30 +89,12 @@ export function getDailyEvidence(entries: JournalEntry[], logs: DailyLogEntry[],
     (busyDay && meal === 'skipped');
   const status = needsBreak ? 'rest' : shortSleep || shortPattern || busyDay || meal === 'skipped' ? 'watch' :
     energy === 'fresh' || energy === 'steady' || (sleep !== null && meal === 'varied') ? 'steady' : 'unknown';
-  return { sleep, meal, mealNote, mealGroups, mealEnjoyment, energy, work, study, fitness, extra, minutesTotal, completed, recentSleep, shortSleep, shortPattern, busyDay, status,
+  return { sleep, meal, mealNote, mealGroups, mealEnjoyment, energy, mood, work, study, fitness, extra, minutesTotal, completed, recentSleep, shortSleep, shortPattern, busyDay, status,
     completedCount: Math.max(finished.length, closed?.completedTasks ?? 0),
     plan: checks.find((entry) => entry.phase === 'morning')?.note ?? '' } as const;
 }
 
 export type DailyEvidence = ReturnType<typeof getDailyEvidence>;
-
-export function journalEncouragement(evidence: DailyEvidence, phase: DayPhase, lang: Language): string {
-  const id = lang === 'id';
-  // Reflections draw on Matthew 11:28, Galatians 6:9 and Proverbs 16:9.
-  if (evidence.status === 'rest') {
-    return id ? 'Kamu boleh berhenti sejenak dan menyerahkan beban yang masih terasa berat kepada Tuhan. Beristirahat juga bagian dari merawat diri.' :
-      'You can pause and entrust what still feels heavy to God. Rest is part of caring for yourself.';
-  }
-  if (evidence.completed.length || evidence.completedCount || evidence.minutesTotal) {
-    return id ? 'Usahamu hari ini layak dihargai. Kebaikan yang dikerjakan tekun tetap berarti, bahkan saat hasilnya belum terlihat.' :
-      'Your effort today is worth recognizing. Small acts of faithful work matter even before you see their results.';
-  }
-  return phase === 'morning'
-    ? (id ? 'Pilih satu langkah yang bisa kamu mulai. Bawa rencanamu kepada Tuhan dan beri ruang bila arah hari ini berubah.' :
-      'Choose one step you can start. Bring your plans to God and leave room for the day to take a different direction.')
-    : (id ? 'Sisakan ruang untuk berterima kasih atas hal kecil hari ini. Kamu bisa memulai lagi dengan satu langkah yang sanggup kamu jalani.' :
-      'Make space to give thanks for one small thing today. You can begin again with a step you can actually take.');
-}
 
 export function getGrowthActions(player: PlayerProfile, logs: DailyLogEntry[], entries: JournalEntry[], evidence: DailyEvidence, lang: Language): GrowthNewsItem[] {
   const id = lang === 'id';

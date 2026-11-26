@@ -2,7 +2,6 @@ import type { Language } from '../types';
 
 export const I18N = {
   id: {
-    headerSubtitle: 'Asisten Karier, Belajar & Kebugaran Berbasis Sains',
     btnScienceLbl: 'RUMUS & JURNAL',
     btnSettingsLbl: 'PENGATURAN',
     btnResetLbl: 'RESET',
@@ -120,7 +119,6 @@ export const I18N = {
     aiConfigTitle: 'Konfigurasi AI (Agnes AI / OpenAI Standar)',
   },
   en: {
-    headerSubtitle: 'Science-Based Career, Study & Fitness Leveling OS',
     btnScienceLbl: 'FORMULAS & JOURNALS',
     btnSettingsLbl: 'SETTINGS',
     btnResetLbl: 'RESET',
