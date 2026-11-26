@@ -13,17 +13,18 @@ Aplikasi web progresif (**PWA**) lintas perangkat untuk **HP (Android / iPhone)*
   - **Manajemen User**: lihat daftar user terdaftar, pantau pemakaian AI, reset kuota harian, suspend/aktifkan akun, dan angkat/cabut admin.
   - **AI Usage Audit Logs**: pantau riwayat pemanggilan AI secara real-time.
 - **Tampilan Adaptif HP & Laptop (PWA Offline)**: Grid 12-kolom Blender Studio di desktop dan **Bottom Navigation Bar** 5 tab di HP, bisa di-install ke Home Screen.
-- **5 Kemampuan Anti-Bias & Engine Sains**: Mifflin-St Jeor (BMR), Morton et al. (2018) protein `1.6g/kg`, Lamon et al. (2021) tidur `-18%`, Schoenfeld et al. (2017) volume latihan, dan Ericsson et al. (1993) deliberate practice.
-- **Avatar 3D dari foto seluruh badan (MediaPipe dan Three.js)** + **Cloud Firestore Real-Time Sync** (Jakarta `asia-southeast2`).
+- **Jurnal harian** dengan check-in pagi, siang, dan malam berdasarkan waktu di perangkat. Catatan tidur, makan, energi, dan tugas yang selesai membantu membentuk rekap dan refleksi harian.
+- **Skill dan upgrade diri** dengan detail sesi, riwayat aktivitas, dan rekomendasi yang mengikuti progres peta impian.
+- **Berita promo harian** dari halaman publik Indomaret dan feed Alfagift dengan tanggal dan tautan sumber.
 
----
+Catatan jurnal akun tersinkron melalui Firebase Firestore. Catatan tamu dan foto profil tersimpan di perangkat. Foto yang sudah dibuat pada versi sebelumnya dapat dipakai di panel energi. Status energi merupakan gambaran dari catatan pemain untuk refleksi harian. Panel gizi mengacu pada [Isi Piringku](https://ayosehat.kemkes.go.id/isi-piringku-kebutuhan-gizi-harian-seimbang) dan panduan tidur [CDC](https://www.cdc.gov/sleep/about/).
 
-Foto seluruh badan diproses di browser. Avatar disimpan di perangkat dan bisa diganti atau dihapus dari panel. Sisi dan belakang adalah perkiraan dari satu foto. Pembuatan avatar memerlukan koneksi untuk memuat model MediaPipe.
+GitHub Actions menjalankan pengambilan berita setiap hari sekitar 07.23 WIB dan menerbitkan hasilnya ke branch `promo-news`. Untuk memeriksa hasil sumber secara lokal, jalankan `python3 scripts/refresh-promo-news.py /tmp/levelup-promo-news.json`.
 
 ## Struktur Project
 
 ```text
-├── src/                  # Frontend PWA (React + TypeScript + Tailwind + Three.js)
+├── src/                  # Frontend PWA (React + TypeScript + Tailwind)
 ├── server/               # Secure Express AI Proxy Server (Node 22 + TypeScript)
 ├── functions/            # Firebase Cloud Functions v2 Proxy (siap deploy Blaze)
 ├── firestore.rules       # Strict per-user + Admin RBAC Security Rules

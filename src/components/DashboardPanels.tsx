@@ -1,38 +1,31 @@
 import React from 'react';
 import {
-  Activity,
   Award,
   Bot,
   Check,
-  CheckCircle2,
   CheckSquare,
   Clock,
   Compass,
   Edit3,
-  ExternalLink,
   Gift,
   Loader2,
-  Newspaper,
   Plus,
   PlusCircle,
-  RefreshCw,
-  Search,
   Shield,
   Sparkles,
   Sun,
   Trash2,
 } from 'lucide-react';
 import type {
-  DiscoveredPerk,
+  GrowthNewsItem,
   Language,
-  NutritionCondition,
   PlayerProfile,
   Quest,
   QuestFilter,
-  SleepCondition,
 } from '../types';
 import { tr } from '../data/i18n';
-import { getActiveStage, getRecoveryMultiplier } from '../engine/science';
+import { getActiveStage } from '../engine/science';
+import { PromoNewsPanel } from './PromoNewsPanel';
 
 // =========================================================================
 // 1. PLAYER IDENTITY & 5 ANTI-BIAS ABILITIES
@@ -167,128 +160,6 @@ export const StatusPanel: React.FC<{
               );
             })}
           </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// =========================================================================
-// 2. DAILY BODY CONDITION & RECOVERY CALIBRATION
-// =========================================================================
-export const BioConditionPanel: React.FC<{
-  player: PlayerProfile;
-  lang: Language;
-  onChangeSleep: (sleep: SleepCondition) => void;
-  onChangeNutrition: (nutrition: NutritionCondition) => void;
-  onEditBio: () => void;
-}> = ({ player, lang, onChangeSleep, onChangeNutrition, onEditBio }) => {
-  const recMult = getRecoveryMultiplier(player.sleepCondition, player.nutritionCondition);
-  const badgeCls =
-    recMult >= 1.0
-      ? 'bg-emerald-600 text-white'
-      : recMult >= 0.9
-        ? 'bg-sky-600 text-white'
-        : 'bg-amber-600 text-white';
-
-  const recAdvice =
-    recMult >= 1.0
-      ? lang === 'id'
-        ? 'Kondisi prima! Pertumbuhan otot dan daya serap belajarmu maksimal.'
-        : 'Peak condition! Muscle synthesis and learning retention are maximized.'
-      : recMult >= 0.9
-        ? lang === 'id'
-          ? 'Tidur & nutrisi seimbang mendukung pertumbuhan otot dan fokus.'
-          : 'Balanced sleep & nutrition support steady strength and focus.'
-        : lang === 'id'
-          ? 'Pemulihan menurun. Prioritaskan tidur cukup & protein hari ini.'
-          : 'Recovery reduced. Prioritize quality sleep & protein today.';
-
-  return (
-    <div className="anime-panel overflow-hidden flex flex-col justify-between h-full">
-      <div className="blender-bar px-3.5 py-1.5 flex items-center justify-between">
-        <span className="font-mono text-[10px] font-bold text-slate-700 flex items-center gap-1.5">
-          <Activity className="w-3.5 h-3.5 text-emerald-600" />
-          {tr(lang, 'bioPanelTitle')}
-        </span>
-        <button
-          type="button"
-          onClick={onEditBio}
-          className="font-mono text-[10px] font-bold text-sky-700 hover:underline"
-        >
-          {tr(lang, 'btnEditBio')}
-        </button>
-      </div>
-
-      <div className="p-4 flex-grow flex flex-col justify-between space-y-3">
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <div className="p-2 rounded bg-slate-50 border border-slate-200">
-            <span className="block font-mono text-[9px] text-slate-500">IMT / BMI</span>
-            <span className="font-hud font-bold text-sm text-slate-900">{player.bio.bmi}</span>
-            <span className="block text-[10px] font-semibold text-emerald-700 truncate">
-              {player.bio.bmiCategory}
-            </span>
-          </div>
-          <div className="p-2 rounded bg-slate-50 border border-slate-200">
-            <span className="block font-mono text-[9px] text-slate-500">
-              {lang === 'id' ? 'KALORI BASAL' : 'BASAL BMR'}
-            </span>
-            <span className="font-hud font-bold text-sm text-slate-900">{player.bio.bmr}</span>
-            <span className="block text-[10px] text-slate-500">
-              {lang === 'id' ? 'kkal/hari' : 'kcal/day'}
-            </span>
-          </div>
-          <div className="p-2 rounded bg-slate-50 border border-slate-200">
-            <span className="block font-mono text-[9px] text-slate-500">
-              {tr(lang, 'lblProteinTarget')}
-            </span>
-            <span className="font-hud font-bold text-sm text-sky-700">
-              {player.bio.proteinTarget}g
-            </span>
-            <span className="block text-[10px] text-slate-500">1.6g/kg BB</span>
-          </div>
-        </div>
-
-        <div className="space-y-2.5">
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              {tr(lang, 'lblSleepToday')}
-            </label>
-            <select
-              value={player.sleepCondition}
-              onChange={(e) => onChangeSleep(e.target.value as SleepCondition)}
-              className="w-full px-3 py-2 rounded bg-white border border-slate-300 text-xs font-semibold text-slate-800 focus:outline-none focus:border-sky-600"
-            >
-              <option value="poor">{tr(lang, 'optSleepLow')}</option>
-              <option value="moderate">{tr(lang, 'optSleepMid')}</option>
-              <option value="optimal">{tr(lang, 'optSleepHigh')}</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              {tr(lang, 'lblNutritionToday')}
-            </label>
-            <select
-              value={player.nutritionCondition}
-              onChange={(e) => onChangeNutrition(e.target.value as NutritionCondition)}
-              className="w-full px-3 py-2 rounded bg-white border border-slate-300 text-xs font-semibold text-slate-800 focus:outline-none focus:border-sky-600"
-            >
-              <option value="deficit">{tr(lang, 'optNutLow')}</option>
-              <option value="balanced">{tr(lang, 'optNutMid')}</option>
-              <option value="high_protein">{tr(lang, 'optNutHigh')}</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="p-2.5 rounded bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-2">
-          <div>
-            <p className="text-xs font-bold text-emerald-900">{tr(lang, 'lblRecoveryRate')}</p>
-            <p className="text-[11px] text-emerald-700 leading-snug">{recAdvice}</p>
-          </div>
-          <span className={`font-mono font-bold text-sm px-2.5 py-1 rounded flex-shrink-0 ${badgeCls}`}>
-            {recMult}x
-          </span>
         </div>
       </div>
     </div>
@@ -860,32 +731,31 @@ export const SkillArsenalPanel: React.FC<{
             <p className="font-mono text-[10px] font-bold text-purple-800 uppercase mb-1.5">
               {tr(lang, 'lblMasteredSkills')}
             </p>
-            <div className="space-y-2 max-h-[190px] overflow-y-auto pr-1">
+            <div className="space-y-2">
               {player.shadows.length === 0 ? (
                 <p className="text-[11px] text-slate-400 italic">
                   {lang === 'id' ? 'Belum ada skill permanen.' : 'No permanent skills unlocked yet.'}
                 </p>
               ) : (
-                player.shadows.map((sh, idx) => (
-                  <div
-                    key={`${sh.name}-${idx}`}
-                    className="flex items-center justify-between p-2 rounded bg-slate-50 border border-slate-200 border-l-2 border-l-purple-600 gap-1.5"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-hud font-bold text-xs text-slate-900 truncate">
-                        {sh.name}
-                      </p>
-                      {sh.totalMinutes > 0 && (
-                        <p className="font-mono text-[9px] text-slate-500">
-                          {sh.totalMinutes} {lang === 'id' ? 'mnt latihan rutin' : 'min practiced'}
-                        </p>
-                      )}
-                    </div>
-                    <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 flex-shrink-0">
-                      {sh.rank}
-                    </span>
-                  </div>
-                ))
+                player.shadows.map((skill, index) => {
+                  const examples = player.quests.filter((quest) => quest.skillTag.trim().toLowerCase() === skill.name.trim().toLowerCase());
+                  return (
+                    <details key={skill.name + index} className="rounded border border-slate-200 border-l-2 border-l-purple-600 bg-slate-50">
+                      <summary className="cursor-pointer rounded p-2 text-xs font-bold text-slate-900 hover:bg-purple-50 focus-visible:outline-purple-600">
+                        <span className="break-words">{skill.name}</span>
+                        <span className="ml-1 inline-block rounded bg-purple-100 px-1.5 py-0.5 font-mono text-[9px] text-purple-800">{skill.rank}</span>
+                      </summary>
+                      <div className="space-y-1.5 border-t border-slate-200 p-2 text-xs text-slate-700">
+                        <p className="font-bold">{lang === 'id' ? 'Skill yang sudah dimiliki' : 'Skill in your collection'}</p>
+                        <p>{skill.sessions} {lang === 'id' ? 'sesi' : 'sessions'} · {skill.totalMinutes} {lang === 'id' ? 'menit tercatat' : 'logged minutes'}</p>
+                        {examples.length > 0 && <>
+                          <p className="font-semibold">{lang === 'id' ? 'Tugas terkait' : 'Related tasks'}</p>
+                          <ul className="list-disc space-y-1 pl-4">{examples.map((quest) => <li key={quest.id}>{quest.title}</li>)}</ul>
+                        </>}
+                      </div>
+                    </details>
+                  );
+                })
               )}
             </div>
           </div>
@@ -898,314 +768,55 @@ export const SkillArsenalPanel: React.FC<{
 // =========================================================================
 // 6. ROW 3: REWARD EXCHANGE + GROWTH NEWS & OPPORTUNITIES
 // =========================================================================
-export const PerksAndNewsSection: React.FC<{
+export function RewardsAndGrowth({ player, lang, actions, onBuyReward, onAddReward, onAddAction }: {
   player: PlayerProfile;
   lang: Language;
-  isDiscoveringPerks: boolean;
-  onUpdateCity: (city: string) => void;
-  onUpdateInterest: (interest: string) => void;
-  onDiscoverPerks: () => void;
-  onClaimPerk: (perk: DiscoveredPerk) => void;
-  onBuyReward: (rewardId: string) => void;
-  onOpenAddReward: () => void;
-  onTurnNewsIntoQuest: (newsIndex: number) => void;
-}> = ({
-  player,
-  lang,
-  isDiscoveringPerks,
-  onUpdateCity,
-  onUpdateInterest,
-  onDiscoverPerks,
-  onClaimPerk,
-  onBuyReward,
-  onOpenAddReward,
-  onTurnNewsIntoQuest,
-}) => {
+  actions: GrowthNewsItem[];
+  onBuyReward: (id: string) => void;
+  onAddReward: () => void;
+  onAddAction: (item: GrowthNewsItem) => void;
+}) {
+  const id = lang === 'id';
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-      {/* LEFT: Reward Exchange */}
-      <div className="lg:col-span-7 anime-panel overflow-hidden flex flex-col justify-between">
-        <div className="blender-bar px-4 py-1.5 flex flex-wrap items-center justify-between gap-2">
-          <span className="font-mono text-[10px] font-bold text-amber-800 flex items-center gap-1.5">
-            <Gift className="w-3.5 h-3.5" />
-            {tr(lang, 'shopPanelTitle')}
-          </span>
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              disabled={isDiscoveringPerks}
-              onClick={onDiscoverPerks}
-              className="font-mono text-[9px] font-bold bg-slate-900 hover:bg-sky-700 disabled:opacity-60 text-white px-2.5 py-1 rounded transition flex items-center gap-1 btn-anime"
-            >
-              {isDiscoveringPerks ? (
-                <Loader2 className="w-3 h-3 animate-spin text-orange-400" />
-              ) : (
-                <Search className="w-3 h-3 text-orange-400" />
-              )}
-              <span>{tr(lang, 'btnDiscoverPerksLbl')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={onOpenAddReward}
-              className="font-mono text-[9px] font-bold text-amber-800 hover:bg-amber-100 border border-amber-400 px-2 py-1 rounded transition"
-            >
-              {tr(lang, 'btnAddReward')}
-            </button>
-          </div>
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+      <section className="anime-panel overflow-hidden">
+        <div className="blender-bar flex items-center justify-between gap-2 px-3 py-2">
+          <h2 className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-amber-800"><Gift className="size-3.5" /> {id ? 'HADIAH DIRI' : 'SELF REWARDS'}</h2>
+          <button type="button" onClick={onAddReward} className="rounded border border-amber-300 px-2 py-1 text-[10px] font-bold text-amber-900">{tr(lang, 'btnAddReward')}</button>
         </div>
-
-        <div className="p-4 space-y-3 flex-grow">
-          {/* City & Wish Filter */}
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 bg-amber-50/60 p-2.5 rounded border border-amber-200">
-            <div className="sm:col-span-4">
-              <label className="block font-mono text-[9px] font-bold text-slate-600 uppercase mb-0.5">
-                {tr(lang, 'lblShopCity')}
-              </label>
-              <input
-                type="text"
-                value={player.city}
-                onChange={(e) => onUpdateCity(e.target.value)}
-                placeholder="Surabaya"
-                className="w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs font-semibold text-slate-900 focus:outline-none focus:border-amber-500"
-              />
-            </div>
-            <div className="sm:col-span-8">
-              <label className="block font-mono text-[9px] font-bold text-slate-600 uppercase mb-0.5">
-                {tr(lang, 'lblShopWish')}
-              </label>
-              <input
-                type="text"
-                value={player.rewardInterest}
-                onChange={(e) => onUpdateInterest(e.target.value)}
-                placeholder={
-                  lang === 'id'
-                    ? 'Misal: Kopi, kursus sertifikat gratis, e-book, promo olahraga...'
-                    : 'E.g.: Coffee, free certified courses, e-books, gym promo...'
-                }
-                className="w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs font-semibold text-slate-900 focus:outline-none focus:border-amber-500"
-              />
-            </div>
-          </div>
-
-          {/* AI Discovered Perks */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5 gap-2">
-              <span className="font-mono text-[10px] font-bold text-amber-900 uppercase">
-                {tr(lang, 'lblAiPerksSub')}
-              </span>
-              <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold uppercase">
-                {player.city || 'SURABAYA'}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {player.discoveredPerks.map((perk) => {
-                const isFree = !perk.cost || perk.cost <= 0;
-                const canAfford = isFree || player.gold >= perk.cost;
-                const isLocal =
-                  perk.type.toUpperCase().includes('DISKON') ||
-                  perk.type.toUpperCase().includes('LOCAL');
-                const badgeStyle = isLocal
-                  ? 'bg-orange-100 text-orange-800 border-orange-300'
-                  : 'bg-emerald-100 text-emerald-800 border-emerald-300';
-
-                return (
-                  <div
-                    key={perk.id}
-                    className="p-3 rounded bg-gradient-to-br from-white to-amber-50/40 border border-amber-300 flex flex-col justify-between gap-2"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-1 mb-1">
-                        <span
-                          className={`font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border ${badgeStyle}`}
-                        >
-                          {perk.type}
-                        </span>
-                        <span
-                          className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded ${
-                            isFree
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-amber-100 text-amber-900 border border-amber-300'
-                          }`}
-                        >
-                          {isFree
-                            ? lang === 'id'
-                              ? 'GRATIS (0 CR)'
-                              : 'FREE (0 CR)'
-                            : `${perk.cost} CR`}
-                        </span>
-                      </div>
-                      <p className="font-hud font-bold text-xs text-slate-900 leading-snug">
-                        {perk.title}
-                      </p>
-                      <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">{perk.desc}</p>
-                    </div>
-                    <div className="flex items-center gap-1.5 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => onClaimPerk(perk)}
-                        className={`flex-grow py-1.5 px-2 rounded font-hud font-bold text-[11px] uppercase tracking-wider transition btn-anime ${
-                          canAfford
-                            ? 'bg-slate-900 hover:bg-amber-600 text-white'
-                            : 'bg-slate-200 text-slate-500'
-                        }`}
-                      >
-                        {isFree
-                          ? lang === 'id'
-                            ? 'KLAIM INFO & CARA'
-                            : 'CLAIM & HOW-TO'
-                          : lang === 'id'
-                            ? `TUKAR ${perk.cost} CR`
-                            : `REDEEM ${perk.cost} CR`}
-                      </button>
-                      {perk.sourceUrl && (
-                        <a
-                          href={perk.sourceUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="py-1.5 px-2.5 rounded border border-sky-300 bg-sky-50 hover:bg-sky-100 text-sky-800 font-mono text-[10px] font-bold flex items-center gap-1"
-                        >
-                          <span>LINK</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Personal Self-Rewards */}
-          <div className="pt-2.5 border-t border-slate-200">
-            <p className="font-mono text-[10px] font-bold text-slate-600 uppercase mb-1.5">
-              {tr(lang, 'lblPersonalRewardsSub')}
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {player.rewards.map((r) => {
-                const canAfford = player.gold >= r.cost;
-                return (
-                  <div
-                    key={r.id}
-                    className="p-2.5 rounded bg-slate-50 border border-slate-300 flex flex-col justify-between gap-2"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="font-hud font-bold text-xs text-slate-900">{r.name}</span>
-                        <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 flex-shrink-0">
-                          {r.cost} CR
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-600 mt-0.5">{r.desc}</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => onBuyReward(r.id)}
-                      className={`w-full py-1.5 rounded font-hud font-bold text-[11px] uppercase tracking-wider transition btn-anime ${
-                        canAfford
-                          ? 'bg-amber-600 hover:bg-amber-700 text-white'
-                          : 'bg-slate-200 text-slate-500'
-                      }`}
-                    >
-                      {lang === 'id' ? 'TUKAR HADIAH' : 'REDEEM REWARD'}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+        <div className="grid gap-2 p-4">
+          {player.rewards.map((reward) => (
+            <article key={reward.id} className="space-y-1.5 rounded border border-slate-200 bg-slate-50 p-2.5">
+              <div className="flex items-start justify-between gap-2 text-xs"><h3 className="font-bold">{reward.name}</h3><span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 font-mono text-amber-900">{reward.cost} CR</span></div>
+              <p className="text-[11px] text-slate-600">{reward.desc}</p>
+              <button type="button" onClick={() => onBuyReward(reward.id)}
+                className="rounded bg-amber-700 px-2 py-1 text-xs font-bold text-white disabled:bg-slate-200 disabled:text-slate-600"
+                disabled={player.gold < reward.cost}>{id ? 'Tukar hadiah' : 'Redeem reward'}</button>
+            </article>
+          ))}
         </div>
-      </div>
-
-      {/* RIGHT: Growth News & Level-Up Opportunities */}
-      <div className="lg:col-span-5 anime-panel overflow-hidden flex flex-col justify-between">
-        <div className="blender-bar px-4 py-1.5 flex items-center justify-between gap-2">
-          <span className="font-mono text-[10px] font-bold text-sky-800 flex items-center gap-1.5">
-            <Newspaper className="w-3.5 h-3.5 text-sky-600" />
-            {tr(lang, 'newsPanelTitle')}
-          </span>
-          <button
-            type="button"
-            disabled={isDiscoveringPerks}
-            onClick={onDiscoverPerks}
-            className="font-mono text-[9px] font-bold text-sky-700 hover:underline flex items-center gap-1 disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3 h-3 ${isDiscoveringPerks ? 'animate-spin' : ''}`} />
-            <span>{tr(lang, 'btnRefreshNewsLbl')}</span>
-          </button>
+      </section>
+      <PromoNewsPanel lang={lang} />
+      <section className="anime-panel overflow-hidden">
+        <div className="blender-bar px-3 py-2">
+          <h2 className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-sky-800"><Compass className="size-3.5" /> {id ? 'PELUANG & UPGRADE DIRI' : 'GROWTH OPPORTUNITIES'}</h2>
         </div>
-
-        <div className="p-4 flex-grow flex flex-col justify-between space-y-3">
-          <div className="space-y-2.5">
-            <p className="text-xs text-slate-600">{tr(lang, 'newsPanelDesc')}</p>
-            <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
-              {player.growthNews.map((item, idx) => (
-                <div
-                  key={item.id}
-                  className="p-3 rounded bg-slate-50 border border-slate-300 hover:border-sky-500 transition space-y-1.5"
-                >
-                  <div className="flex items-center justify-between gap-1.5">
-                    <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 border border-sky-300">
-                      {item.tag}
-                    </span>
-                    {item.sourceUrl && (
-                      <a
-                        href={item.sourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-mono text-[9px] font-bold text-sky-700 hover:underline flex items-center gap-0.5"
-                      >
-                        <span>{lang === 'id' ? 'Baca Sumber' : 'Source'}</span>
-                        <ExternalLink className="w-2.5 h-2.5" />
-                      </a>
-                    )}
-                  </div>
-                  <p className="font-hud font-bold text-xs text-slate-900 leading-snug">
-                    {item.title}
-                  </p>
-                  <p className="text-[11px] text-slate-600 leading-relaxed">{item.summary}</p>
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={() => onTurnNewsIntoQuest(idx)}
-                      className="px-2.5 py-1 rounded bg-slate-900 hover:bg-sky-700 text-white font-mono text-[9px] font-bold transition flex items-center gap-1 btn-anime"
-                    >
-                      <CheckCircle2 className="w-3 h-3 text-orange-400" />
-                      <span>
-                        {lang === 'id'
-                          ? 'JADIKAN TUGAS BELAJAR / KERJA'
-                          : 'ADD TO DAILY TASKS'}
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {player.groundingSources.length > 0 && (
-            <div className="pt-2 border-t border-slate-200">
-              <p className="font-mono text-[9px] font-bold text-slate-500 uppercase mb-1">
-                {lang === 'id' ? 'SUMBER REFERENSI:' : 'REFERENCE SOURCES:'}
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {player.groundingSources.slice(0, 4).map((s) => (
-                  <a
-                    key={s.uri}
-                    href={s.uri}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[10px] font-mono px-2 py-0.5 rounded bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 truncate max-w-[200px]"
-                    title={s.title}
-                  >
-                    ↗ {s.title}
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
+        <div className="space-y-2 p-4">
+          <p className="text-xs leading-relaxed text-slate-600">{id ? 'Langkah berikutnya berdasarkan riwayat aktivitas, skill, dan tahap yang sudah kamu lewati.' : 'Next steps based on your activity history, skills, and completed milestones.'}</p>
+          {actions.map((item) => {
+            const alreadyAdded = player.quests.some((quest) => !quest.completed && quest.title === item.actionTask.slice(0, 140));
+            return <article key={item.id} className="space-y-1.5 rounded border border-slate-200 bg-slate-50 p-2.5">
+              <p className="text-[10px] font-bold text-sky-800">{item.tag}</p>
+              <h3 className="text-xs font-bold leading-snug">{item.title}</h3>
+              <p className="text-xs leading-relaxed text-slate-600">{item.summary}</p>
+              <button type="button" onClick={() => onAddAction(item)} disabled={alreadyAdded}
+                className="rounded bg-slate-900 px-2 py-1.5 text-[11px] font-bold text-white disabled:bg-slate-200 disabled:text-slate-600">
+                {alreadyAdded ? (id ? 'Ada di daftar tugas' : 'Already in tasks') : (id ? 'Jadikan tugas' : 'Add to tasks')}
+              </button>
+            </article>;
+          })}
         </div>
-      </div>
+      </section>
     </div>
   );
-};
+}

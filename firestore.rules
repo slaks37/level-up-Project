@@ -428,6 +428,32 @@ service cloud.firestore {
         isValidBoss(data.boss);
     }
 
+    function isValidJournalEntry(data, entryId) {
+      let base = ['kind', 'dateKey', 'updatedAt'];
+      let checkIn = ['phase', 'sleepHours', 'meal', 'mealNote', 'energy', 'note', 'extraMinutes'];
+      let activity = ['title', 'minutes', 'category'];
+      return isValidDateKey(data.dateKey) &&
+        data.updatedAt is int && data.updatedAt >= 0 &&
+        (
+          (data.kind == 'checkin' &&
+            data.keys().hasOnly(base.concat(checkIn)) && data.keys().hasAll(base.concat(checkIn)) &&
+            data.phase in ['morning', 'day', 'evening'] && entryId == data.dateKey + '-' + data.phase &&
+            (data.sleepHours == null || isNumberInRange(data.sleepHours, 0, 24)) &&
+            data.meal in ['', 'skipped', 'partial', 'varied'] &&
+            data.mealNote is string && data.mealNote.size() <= 300 &&
+            data.energy in ['', 'fresh', 'steady', 'tired'] &&
+            data.note is string && data.note.size() <= 1500 &&
+            isIntInRange(data.extraMinutes, 0, 1440)
+          ) ||
+          (data.kind == 'activity' &&
+            data.keys().hasOnly(base.concat(activity)) && data.keys().hasAll(base.concat(activity)) &&
+            entryId.matches(data.dateKey + '-task-.+') &&
+            data.title is string && data.title.size() > 0 && data.title.size() <= 140 &&
+            isIntInRange(data.minutes, 0, 1440) &&
+            data.category in ['CAREER', 'STUDY', 'FITNESS'])
+        );
+    }
+
     function isValidDailyLog(data, userId, dateKey) {
       let allowedFields = [
         'ownerUid', 'dateKey', 'completedTasks', 'totalTasks',
@@ -525,6 +551,11 @@ service cloud.firestore {
           areImmutableFieldsUnchanged(['ownerUid']) &&
           isValidProfile(request.resource.data, userId);
         allow delete: if isOwner(userId) && docId == 'main';
+      }
+
+      match /journal/{entryId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidJournalEntry(request.resource.data, entryId);
       }
 
       // Daily progress logs keyed by YYYY-MM-DD (strictly owner-only)

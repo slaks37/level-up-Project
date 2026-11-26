@@ -1,0 +1,38 @@
+name: Daily promo news
+on:
+  schedule:
+    - cron: '23 0 * * *' # 07:23 WIB
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-promo-news
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect public promo stories
+        run: python3 scripts/refresh-promo-news.py "$RUNNER_TEMP/promo-news.json"
+      - name: Publish news snapshot
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code origin refs/heads/promo-news; then
+            git fetch origin promo-news
+            git switch --detach FETCH_HEAD
+          else
+            git switch --orphan promo-news
+          fi
+          cp "$RUNNER_TEMP/promo-news.json" promo-news.json
+          git add promo-news.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update dated Level Up promo news"
+            git push origin HEAD:refs/heads/promo-news
+          fi

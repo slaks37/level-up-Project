@@ -52,9 +52,9 @@ export function saveLocalPlayer(player: PlayerProfile | null): void {
   }
 }
 
-export function loadLocalLogs(): DailyLogEntry[] {
+export function loadLocalLogs(uid?: string): DailyLogEntry[] {
   try {
-    const raw = localStorage.getItem(KEYS.LOGS);
+    const raw = localStorage.getItem(uid ? KEYS.LOGS + ':' + uid : KEYS.LOGS);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as DailyLogEntry[]) : [];
@@ -63,9 +63,9 @@ export function loadLocalLogs(): DailyLogEntry[] {
   }
 }
 
-export function saveLocalLogs(logs: DailyLogEntry[]): void {
+export function saveLocalLogs(logs: DailyLogEntry[], uid?: string): void {
   try {
-    localStorage.setItem(KEYS.LOGS, JSON.stringify(logs.slice(0, 60)));
+    localStorage.setItem(uid ? KEYS.LOGS + ':' + uid : KEYS.LOGS, JSON.stringify(logs.slice(0, 60)));
   } catch {
     // Ignore
   }

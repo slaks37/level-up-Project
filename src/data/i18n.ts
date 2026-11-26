@@ -108,7 +108,7 @@ export const I18N = {
     navTasks: 'Tugas',
     navDream: 'Impian',
     navSkills: 'Skill',
-    navPerks: 'Hadiah',
+    navPerks: 'Berita',
 
     syncSynced: 'Tersinkron',
     syncSyncing: 'Menyinkronkan...',
@@ -227,7 +227,7 @@ export const I18N = {
     navTasks: 'Tasks',
     navDream: 'Dream',
     navSkills: 'Skills',
-    navPerks: 'Perks',
+    navPerks: 'News',
 
     syncSynced: 'Synced',
     syncSyncing: 'Syncing...',

@@ -3,16 +3,14 @@ import type { User } from 'firebase/auth';
 import type {
   AIConfig,
   DailyLogEntry,
-  DiscoveredPerk,
+  GrowthNewsItem,
   FirebaseRuntimeConfig,
   Language,
   MobileTab,
-  NutritionCondition,
   PlayerProfile,
   Quest,
   QuestFilter,
   SharedAIPublicConfig,
-  SleepCondition,
   SyncStatus,
   ToastItem,
 } from './types';
@@ -56,7 +54,6 @@ import {
   upsertUserMeta,
 } from './services/firebaseService';
 import {
-  discoverPerksAndOpportunities,
   generateAIDreamRoadmap,
   generateAIQuests,
 } from './services/aiService';
@@ -65,13 +62,14 @@ import { MobileNav } from './components/MobileNav';
 import { AuthView } from './components/AuthView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AwakeningView } from './components/AwakeningView';
-import { ThreeAvatarViewport } from './components/ThreeAvatarViewport';
+import { BodyConditionPanel, DailyCheckInModal, NutritionPanel } from './components/JournalPanels';
+import { getDailyEvidence, getGrowthActions, getJournalMoment, type CheckIn, type CheckInInput, type DayPhase } from './engine/journal';
+import { useJournal } from './services/useJournal';
 import { avatarOwnerKey, deleteAvatarPhoto } from './services/avatarStorage';
 import {
-  BioConditionPanel,
   DailyTasksPanel,
   DreamRoadmapPanel,
-  PerksAndNewsSection,
+  RewardsAndGrowth,
   SkillArsenalPanel,
   StatusPanel,
 } from './components/DashboardPanels';
@@ -84,7 +82,6 @@ import {
   CompleteQuestModal,
   EditBioModal,
   EditDreamModal,
-  PerkDetailModal,
   ResetConfirmModal,
   ScienceModal,
 } from './components/Modals';
@@ -109,7 +106,7 @@ type ActiveModal =
   | { type: 'completeQuest'; quest: Quest }
   | { type: 'addSkill' }
   | { type: 'addReward' }
-  | { type: 'perkDetail'; perk: DiscoveredPerk }
+  | { type: 'checkIn'; dateKey: string; phase: DayPhase; owner: string }
   | { type: 'completeDay' };
 
 export default function App() {
@@ -120,6 +117,8 @@ export default function App() {
     loadLocalPlayer(loadSavedLanguage())
   );
   const [dailyLogs, setDailyLogs] = useState<DailyLogEntry[]>(() => loadLocalLogs());
+  const [moment, setMoment] = useState(getJournalMoment);
+  const promptedCheckIns = useRef(new Set<string>());
   const [aiConfig, setAIConfig] = useState<AIConfig>(() => loadAIConfig());
   const [sfxMutedState, setSfxMutedState] = useState<boolean>(() => {
     const m = loadSfxMuted();
@@ -146,10 +145,10 @@ export default function App() {
   // AI Loading States
   const [isGeneratingRoadmap, setIsGeneratingRoadmap] = useState(false);
   const [isGeneratingQuests, setIsGeneratingQuests] = useState(false);
-  const [isDiscoveringPerks, setIsDiscoveringPerks] = useState(false);
 
   // Firebase Cloud Sync States
   const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const journal = useJournal(isAdminView ? undefined : cloudUser?.uid);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('local');
   const [firebaseVersion, setFirebaseVersion] = useState(0);
 
@@ -276,6 +275,7 @@ export default function App() {
     let unsubProfile: (() => void) | null = null;
     let unsubSharedAI: (() => void) | null = null;
     let cancelled = false;
+    let activeUid: string | undefined;
 
     const boot = async () => {
       const ready = await initFirebaseFromConfig();
@@ -293,6 +293,8 @@ export default function App() {
       unsubAuth = subscribeAuth((user) => {
         if (cancelled) return;
         setCloudUser(user);
+        activeUid = user?.uid;
+        setDailyLogs(loadLocalLogs(activeUid));
         setAuthResolved(true);
 
         if (unsubProfile) {
@@ -328,12 +330,14 @@ export default function App() {
           if (!cancelled) setSharedAIConfig(cfg);
         });
 
-        void fetchRecentDailyLogs(user.uid, 20)
+        void fetchRecentDailyLogs(user.uid, 60)
           .then((cloudLogs) => {
-            if (!cancelled && cloudLogs.length > 0) {
-              setDailyLogs(cloudLogs);
-              saveLocalLogs(cloudLogs);
-            }
+            if (cancelled || activeUid !== user.uid) return;
+            const merged = new Map(loadLocalLogs(user.uid).map((entry) => [entry.dateKey, entry]));
+            for (const entry of cloudLogs) merged.set(entry.dateKey, entry);
+            const next = [...merged.values()].sort((a, b) => b.dateKey.localeCompare(a.dateKey)).slice(0, 60);
+            saveLocalLogs(next, user.uid);
+            setDailyLogs(next);
           })
           .catch(() => {});
 
@@ -416,7 +420,6 @@ export default function App() {
 
     if (aiConfig.apiKey.trim() || (cloudUser && sharedAIConfig?.enabled && sharedAIConfig?.proxyConfigured)) {
       void runGenerateRoadmap(created, true);
-      void runDiscoverPerks(created, true);
     }
   };
 
@@ -496,49 +499,10 @@ export default function App() {
           : '';
       notify(
         lang === 'id'
-          ? `Agnes AI membuat Tugas Harian baru sesuai kondisi tubuh & impianmu!${quotaTxt}`
-          : `Agnes AI generated fresh daily tasks matched to your recovery & goal!${quotaTxt}`,
+          ? `Agnes AI membuat Tugas Harian baru sesuai peta impianmu!${quotaTxt}`
+          : `Agnes AI generated fresh daily tasks matched to your roadmap!${quotaTxt}`,
         'success'
       );
-    }
-  };
-
-  const runDiscoverPerks = async (targetPlayer?: PlayerProfile, silent = false) => {
-    const active = targetPlayer ?? playerRef.current;
-    if (!active) return;
-
-    setIsDiscoveringPerks(true);
-    const res = await discoverPerksAndOpportunities(active, lang, aiConfig);
-    setIsDiscoveringPerks(false);
-
-    const latest = playerRef.current ?? active;
-    commitPlayerChange({
-      ...latest,
-      discoveredPerks: res.perks,
-      growthNews: res.news,
-    });
-
-    if (!silent) {
-      playSFX('quest');
-      if (res.usedFallback) {
-        notify(
-          res.errorMessage
-            ? lang === 'id'
-              ? `AI info (${res.errorMessage.slice(0, 75)}). Menampilkan rekomendasi lokal.`
-              : `AI note (${res.errorMessage.slice(0, 75)}). Showing local recommendations.`
-            : lang === 'id'
-              ? `Menampilkan rekomendasi lokal untuk ${latest.city}.`
-              : `Showing curated perks for ${latest.city}.`,
-          'info'
-        );
-      } else {
-        notify(
-          lang === 'id'
-            ? `Berhasil menemukan diskon sekitar ${latest.city}, klaim gratis & peluang baru!`
-            : `Found local deals in ${latest.city}, freebies & new opportunities!`,
-          'success'
-        );
-      }
     }
   };
 
@@ -551,6 +515,16 @@ export default function App() {
       const { nextPlayer, result, levelsGained, unlockedSkill, autoCompletedStepTitle } =
         applyQuestCompletion(player, quest.id, qty, rpe, lang);
 
+      const { dateKey } = getJournalMoment();
+      journal.save({
+        id: dateKey + '-task-' + encodeURIComponent(quest.id),
+        dateKey,
+        kind: 'activity',
+        title: quest.title.slice(0, 140),
+        category: quest.category,
+        minutes: Math.min(1440, Math.max(0, Math.round(result.loggedMinutes))),
+        updatedAt: Date.now(),
+      });
       commitPlayerChange(nextPlayer);
       setModal(null);
 
@@ -702,7 +676,7 @@ export default function App() {
       ...dailyLogs.filter((l) => l.dateKey !== logEntry.dateKey),
     ].slice(0, 60);
     setDailyLogs(nextLogs);
-    saveLocalLogs(nextLogs);
+    saveLocalLogs(nextLogs, cloudUser?.uid);
 
     if (cloudUser) {
       void saveDailyLogToCloud(cloudUser.uid, logEntry).catch(() => {});
@@ -742,26 +716,6 @@ export default function App() {
     );
   };
 
-  const handleClaimPerk = (perk: DiscoveredPerk) => {
-    if (!player) return;
-    const cost = perk.cost || 0;
-    if (cost > 0 && player.gold < cost) {
-      notify(
-        lang === 'id'
-          ? `Koin belum cukup! Butuh ${cost} CR.`
-          : `Not enough coins! Need ${cost} CR.`,
-        'warning'
-      );
-      return;
-    }
-
-    if (cost > 0) {
-      commitPlayerChange({ ...player, gold: player.gold - cost });
-    }
-    playSFX('levelup');
-    setModal({ type: 'perkDetail', perk });
-  };
-
   const handleBuyReward = (rewardId: string) => {
     if (!player) return;
     const rew = player.rewards.find((r) => r.id === rewardId);
@@ -785,20 +739,18 @@ export default function App() {
     );
   };
 
-  const handleTurnNewsIntoQuest = (newsIndex: number) => {
+  const handleTurnNewsIntoQuest = (item: GrowthNewsItem) => {
     if (!player) return;
-    const item = player.growthNews[newsIndex];
-    if (!item) return;
+    const title = item.actionTask.slice(0, 140);
+    if (player.quests.some((quest) => !quest.completed && quest.title === title)) return;
     const activeStep = player.dreamSteps.find((s) => !s.completed);
     const nextQuest: Quest = {
       id: `opp_q_${Date.now()}`,
-      title:
-        item.actionTask ||
-        `${lang === 'id' ? 'Pelajari & Terapkan:' : 'Explore & Apply:'} ${item.title}`,
+      title,
       category: 'STUDY',
       unitType: 'MINUTES',
-      defaultQty: 45,
-      skillTag: item.tag || 'Riset Peluang Baru',
+      defaultQty: 20,
+      skillTag: item.tag,
       dreamStepId: activeStep?.id ?? null,
       exp: 45,
       gold: 40,
@@ -909,7 +861,7 @@ export default function App() {
         commitPlayerChange(normalized);
         if (Array.isArray(parsed.dailyLogs)) {
           setDailyLogs(parsed.dailyLogs);
-          saveLocalLogs(parsed.dailyLogs);
+          saveLocalLogs(parsed.dailyLogs, cloudUser?.uid);
         }
         setModal(null);
         notify(
@@ -926,6 +878,47 @@ export default function App() {
       }
     };
     reader.readAsText(file);
+  };
+
+  useEffect(() => {
+    const refresh = () => setMoment((previous) => {
+      const current = getJournalMoment();
+      return previous.dateKey === current.dateKey && previous.phase === current.phase ? previous : current;
+    });
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    const interval = window.setInterval(refresh, 30_000);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  const { dateKey, phase } = moment;
+  const currentCheckInId = dateKey + '-' + phase;
+  const hasCheckIn = journal.records.some((entry) => entry.id === currentCheckInId);
+  const isPlayerReady = Boolean(player) && authResolved && !isAdminView && !showAuthScreen && journal.ready;
+  useEffect(() => {
+    if (modal?.type === 'checkIn' && modal.owner !== journal.key) {
+      setModal(null);
+      return;
+    }
+    const key = journal.key + ':' + currentCheckInId;
+    if (!isPlayerReady || hasCheckIn || modal || promptedCheckIns.current.has(key)) return;
+    promptedCheckIns.current.add(key);
+    setModal({ type: 'checkIn', dateKey, phase, owner: journal.key });
+  }, [isPlayerReady, hasCheckIn, modal, journal.key, currentCheckInId, dateKey, phase]);
+
+  const evidence = getDailyEvidence(journal.records, dailyLogs, dateKey, player?.age ?? 18);
+  const openCheckIn = () => setModal({ type: 'checkIn', ...getJournalMoment(), owner: journal.key });
+  const saveCheckIn = (input: CheckInInput) => {
+    if (modal?.type !== 'checkIn' || modal.owner !== journal.key) return;
+    const entry: CheckIn = { ...input, id: modal.dateKey + '-' + modal.phase,
+      dateKey: modal.dateKey, phase: modal.phase, kind: 'checkin', updatedAt: Date.now() };
+    journal.save(entry);
+    setModal(null);
+    notify(lang === 'id' ? 'Check-in tersimpan.' : 'Check-in saved.', 'success');
   };
 
   const avatarOwner = avatarOwnerKey(cloudUser?.uid);
@@ -1014,7 +1007,10 @@ export default function App() {
           />
         ) : (
           <section className="space-y-5">
-            {/* ROW 1: STATUS | BODY CONDITION | 3D VIEWPORT */}
+            {journal.syncError && <p role="status" className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+              {lang === 'id' ? 'Jurnal tersimpan di perangkat. Sinkronisasi Cloud sedang bermasalah.' : 'Journal is on this device. Cloud sync is currently unavailable.'}
+            </p>}
+            {/* ROW 1: STATUS | NUTRITION | ENERGY */}
             <div
               className={`${
                 mobileTab === 'status' ? 'grid' : 'hidden lg:grid'
@@ -1024,28 +1020,11 @@ export default function App() {
                 <StatusPanel player={player} lang={lang} />
               </div>
               <div className="lg:col-span-4">
-                <BioConditionPanel
-                  player={player}
-                  lang={lang}
-                  onChangeSleep={(sleep: SleepCondition) => {
-                    playSFX('click');
-                    commitPlayerChange({ ...player, sleepCondition: sleep });
-                  }}
-                  onChangeNutrition={(nutrition: NutritionCondition) => {
-                    playSFX('click');
-                    commitPlayerChange({ ...player, nutritionCondition: nutrition });
-                  }}
-                  onEditBio={() => setModal({ type: 'editBio' })}
-                />
+                <NutritionPanel lang={lang} evidence={evidence} onOpen={openCheckIn} onEditProfile={() => setModal({ type: 'editBio' })} />
               </div>
               <div className="lg:col-span-4">
-                <ThreeAvatarViewport
-                  key={avatarOwner}
-                  owner={avatarOwner}
-                  coreCharge={player.coreCharge}
-                  lang={lang}
-                  onExtractOverdrive={handleExtractCoreOverdrive}
-                />
+                <BodyConditionPanel key={avatarOwner} owner={avatarOwner} evidence={evidence} phase={phase}
+                  lang={lang} coreCharge={player.coreCharge} onOpen={openCheckIn} onBonus={handleExtractCoreOverdrive} />
               </div>
             </div>
 
@@ -1117,20 +1096,11 @@ export default function App() {
 
             {/* ROW 3: REWARD EXCHANGE + GROWTH NEWS */}
             <div className={mobileTab === 'perks' ? 'block' : 'hidden lg:block'}>
-              <PerksAndNewsSection
-                player={player}
-                lang={lang}
-                isDiscoveringPerks={isDiscoveringPerks}
-                onUpdateCity={(city) => commitPlayerChange({ ...player, city })}
-                onUpdateInterest={(rewardInterest) =>
-                  commitPlayerChange({ ...player, rewardInterest })
-                }
-                onDiscoverPerks={() => void runDiscoverPerks()}
-                onClaimPerk={handleClaimPerk}
+              <RewardsAndGrowth player={player} lang={lang}
+                actions={getGrowthActions(player, dailyLogs, journal.records, evidence, lang)}
                 onBuyReward={handleBuyReward}
-                onOpenAddReward={() => setModal({ type: 'addReward' })}
-                onTurnNewsIntoQuest={handleTurnNewsIntoQuest}
-              />
+                onAddReward={() => setModal({ type: 'addReward' })}
+                onAddAction={handleTurnNewsIntoQuest} />
             </div>
           </section>
         )}
@@ -1338,9 +1308,12 @@ export default function App() {
         />
       )}
 
-      {modal?.type === 'perkDetail' && (
-        <PerkDetailModal perk={modal.perk} lang={lang} onClose={() => setModal(null)} />
-      )}
+      {modal?.type === 'checkIn' && player && !isAdminView && modal.owner === journal.key && (() => {
+        const id = modal.dateKey + '-' + modal.phase;
+        const saved = journal.records.find((entry): entry is CheckIn => entry.kind === 'checkin' && entry.id === id);
+        return <DailyCheckInModal key={journal.key + id} name={player.name} lang={lang} phase={modal.phase} initial={saved}
+          evidence={getDailyEvidence(journal.records, dailyLogs, modal.dateKey, player.age)} onSave={saveCheckIn} onClose={() => setModal(null)} />;
+      })()}
 
       {modal?.type === 'completeDay' && player && (
         <CompleteDayModal

@@ -1,11 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useId, useMemo, useState } from 'react';
 import {
   Activity,
   Award,
   BookOpenCheck,
   CheckCircle2,
   Compass,
-  ExternalLink,
   Gift,
   PlusCircle,
   RotateCcw,
@@ -15,7 +14,6 @@ import {
 } from 'lucide-react';
 import type {
   DailyLogEntry,
-  DiscoveredPerk,
   Language,
   PlayerProfile,
   Quest,
@@ -31,6 +29,7 @@ export const ModalShell: React.FC<{
   onClose: () => void;
   children: React.ReactNode;
 }> = ({ title, icon, maxWidth = 'max-w-lg', onClose, children }) => {
+  const titleId = useId();
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4"
@@ -38,16 +37,17 @@ export const ModalShell: React.FC<{
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className={`anime-panel ${maxWidth} w-full overflow-hidden shadow-2xl`}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`anime-panel ${maxWidth} w-full overflow-hidden shadow-2xl`}>
         <div className="blender-bar px-4 py-2 flex items-center justify-between gap-2">
           <span className="font-hud font-bold text-xs text-slate-900 uppercase tracking-wider flex items-center gap-2 truncate">
             {icon ?? <Terminal className="w-4 h-4 text-sky-600" />}
-            <span className="truncate">{title}</span>
+            <span id={titleId} className="truncate">{title}</span>
           </span>
           <button
             type="button"
             onClick={onClose}
             className="text-slate-500 hover:text-slate-900 p-1 rounded"
+            aria-label="Close"
           >
             <X className="w-4 h-4" />
           </button>
@@ -186,7 +186,7 @@ export const CompleteQuestModal: React.FC<{
             )}
           </div>
           <p className="text-[10px] text-emerald-700 font-mono">
-            Recovery: {preview.recMult}x • Effort: {preview.intensityFactor}x • Log: +
+            Effort: {preview.intensityFactor}x • Log: +
             {preview.loggedMinutes}m
           </p>
         </div>
@@ -219,31 +219,19 @@ export const ScienceModal: React.FC<{ lang: Language; onClose: () => void }> = (
     <div className="space-y-3 text-xs leading-relaxed">
       <div className="p-3 rounded bg-slate-50 border border-slate-200">
         <p className="font-bold text-slate-900">
-          1. {lang === 'id' ? 'Kebutuhan Kalori & Protein Tubuh' : 'Basal Calories & Optimal Protein'}
+          1. {lang === 'id' ? 'Panduan porsi makan' : 'Meal portion guide'}
         </p>
-        <p className="text-slate-600 mt-1">
-          • <strong>Mifflin-St Jeor (1990):</strong>{' '}
-          {lang === 'id'
-            ? 'Menghitung BMR berdasarkan Umur, Tinggi Badan, Berat Badan & Jenis Kelamin.'
-            : 'Calculates BMR from Age, Height, Weight & Biological Sex.'}
-        </p>
-        <p className="text-slate-600">
-          • <strong>Morton et al. (2018, BJSM):</strong>{' '}
-          {lang === 'id'
-            ? 'Target protein optimal 1.6 g / kg BB / hari untuk memaksimalkan sintesis protein otot (MPS).'
-            : 'Optimal protein target of 1.6 g / kg BW / day to maximize muscle protein synthesis (MPS).'}
-        </p>
+        <p className="mt-1 text-slate-600">{lang === 'id'
+          ? 'Isi Piringku dari Kemenkes membagi porsi satu kali makan antara sayur dan buah, serta makanan pokok dan lauk.'
+          : 'Indonesia’s Ministry of Health plate guide splits one meal between vegetables and fruit, and staple foods and protein.'}</p>
+        <a href="https://ayosehat.kemkes.go.id/isi-piringku-kebutuhan-gizi-harian-seimbang" target="_blank" rel="noreferrer" className="text-sky-700 underline">Isi Piringku</a>
       </div>
       <div className="p-3 rounded bg-slate-50 border border-slate-200">
-        <p className="font-bold text-slate-900">
-          2. {lang === 'id' ? 'Dampak Durasi Tidur Terhadap Otot & Fokus' : 'Sleep Impact on Hypertrophy & Focus'}
-        </p>
-        <p className="text-slate-600 mt-1">
-          • <strong>Lamon et al. (2021, Physiological Reports):</strong>{' '}
-          {lang === 'id'
-            ? 'Kurang tidur (< 6 jam) menurunkan laju sintesis protein otot sebesar -18% (pengali 0.82x).'
-            : 'Acute sleep restriction (< 6 hrs) reduces muscle protein synthesis by ~18% (0.82x multiplier).'}
-        </p>
+        <p className="font-bold text-slate-900">2. {lang === 'id' ? 'Durasi tidur dan energi' : 'Sleep duration and energy'}</p>
+        <p className="mt-1 text-slate-600">{lang === 'id'
+          ? 'Panduan umum tidur berbeda menurut usia. Status energi merangkum catatanmu untuk membantu refleksi harian.'
+          : 'General sleep guidance varies with age. Your energy status summarizes your logs for daily reflection.'}</p>
+        <a href="https://www.cdc.gov/sleep/about/" target="_blank" rel="noreferrer" className="text-sky-700 underline">CDC · {lang === 'id' ? 'Panduan tidur' : 'Sleep guidance'}</a>
       </div>
       <div className="p-3 rounded bg-slate-50 border border-slate-200">
         <p className="font-bold text-slate-900">
@@ -791,53 +779,6 @@ export const AddRewardModal: React.FC<{
   );
 };
 
-// 9. PERK CLAIM DETAIL MODAL
-export const PerkDetailModal: React.FC<{
-  perk: DiscoveredPerk;
-  lang: Language;
-  onClose: () => void;
-}> = ({ perk, lang, onClose }) => (
-  <ModalShell
-    title={lang === 'id' ? 'DETAIL KLAIM & REKOMENDASI HADIAH' : 'PERK & FREEBIE CLAIM DETAILS'}
-    icon={<Gift className="w-4 h-4 text-amber-600" />}
-    onClose={onClose}
-  >
-    <div className="space-y-3">
-      <div className="p-3 rounded bg-amber-50 border border-amber-300">
-        <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-slate-900 text-orange-400">
-          {perk.type}
-        </span>
-        <h3 className="font-hud font-bold text-base text-slate-900 mt-1.5">{perk.title}</h3>
-        <p className="text-xs text-slate-700 mt-1">{perk.desc}</p>
-      </div>
-      <div className="p-3 rounded bg-slate-50 border border-slate-200 text-xs">
-        <p className="font-bold text-slate-900 mb-1">
-          {lang === 'id' ? 'Langkah Klaim / Pemanfaatan:' : 'How to Claim / Use:'}
-        </p>
-        <p className="text-slate-700">
-          {perk.actionTip ||
-            (lang === 'id'
-              ? 'Kunjungi tautan sumber atau lokasi promo terkait untuk menikmati penawaran ini.'
-              : 'Visit the linked source or local venue to enjoy this offer.')}
-        </p>
-      </div>
-      {perk.sourceUrl && (
-        <a
-          href={perk.sourceUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="w-full py-2.5 bg-sky-700 hover:bg-sky-800 text-white font-hud font-bold text-xs uppercase tracking-wider btn-anime flex items-center justify-center gap-1.5"
-        >
-          <span>
-            {lang === 'id' ? 'BUKA HALAMAN SUMBER / PROMO' : 'OPEN SOURCE / OFFER PAGE'}
-          </span>
-          <ExternalLink className="w-3.5 h-3.5" />
-        </a>
-      )}
-    </div>
-  </ModalShell>
-);
-
 // 10. COMPLETE DAY SUMMARY MODAL
 export const CompleteDayModal: React.FC<{
   player: PlayerProfile;
@@ -948,8 +889,8 @@ export const ResetConfirmModal: React.FC<{
   >
     <p className="text-xs text-slate-700">
       {lang === 'id'
-        ? 'Reset ini menghapus progres saat ini dan avatar di perangkat ini. Jika sedang login, progres di Cloud juga akan dihapus.'
-        : 'This clears your current progress and the avatar on this device. If signed in, it also clears your cloud progress.'}
+        ? 'Reset ini menghapus progres saat ini dan foto di perangkat ini. Jika sedang login, progres di Cloud juga akan dihapus.'
+        : 'This clears your current progress and the photo on this device. If signed in, it also clears your cloud progress.'}
     </p>
     <div className="flex justify-end gap-2 pt-2">
       <button

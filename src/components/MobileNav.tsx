@@ -1,5 +1,5 @@
 import React from 'react';
-import { Award, CheckSquare, Compass, Gift, Shield } from 'lucide-react';
+import { Award, CheckSquare, Compass, Newspaper, Shield } from 'lucide-react';
 import type { Language, MobileTab } from '../types';
 import { tr } from '../data/i18n';
 
@@ -31,7 +31,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
     },
     { id: 'dream', label: tr(lang, 'navDream'), icon: <Compass className="w-5 h-5" /> },
     { id: 'skills', label: tr(lang, 'navSkills'), icon: <Award className="w-5 h-5" /> },
-    { id: 'perks', label: tr(lang, 'navPerks'), icon: <Gift className="w-5 h-5" /> },
+    { id: 'perks', label: tr(lang, 'navPerks'), icon: <Newspaper className="w-5 h-5" /> },
   ];
 
   return (

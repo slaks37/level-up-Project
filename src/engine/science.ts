@@ -1,18 +1,14 @@
 import type {
   Biometrics,
   DailyBreakdown,
-  DiscoveredPerk,
   DreamStep,
   Gender,
-  GrowthNewsItem,
   Language,
-  NutritionCondition,
   PlayerProfile,
   PlayerStats,
   ProfessionPreset,
   Quest,
   SelfReward,
-  SleepCondition,
 } from '../types';
 
 export const PLAYER_SCHEMA_VERSION = 3;
@@ -48,22 +44,10 @@ export function calculateBiometrics(
   return { bmi, bmiCategory, bmr, proteinTarget };
 }
 
-export function getRecoveryMultiplier(
-  sleep: SleepCondition = 'moderate',
-  nutrition: NutritionCondition = 'balanced'
-): number {
-  // Lamon et al. (2021, Physiological Reports): Acute sleep restriction reduces MPS by ~18%
-  const sleepMult = sleep === 'poor' ? 0.82 : sleep === 'optimal' ? 1.05 : 0.95;
-  // Morton et al. (2018): Adequate protein & energy optimizes hypertrophy & cognitive stamina
-  const nutMult = nutrition === 'deficit' ? 0.85 : nutrition === 'high_protein' ? 1.12 : 1.0;
-  return +(sleepMult * nutMult).toFixed(2);
-}
-
 export interface ScientificGainResult {
   gains: PlayerStats;
   expEarned: number;
   goldEarned: number;
-  recMult: number;
   intensityFactor: number;
   loggedMinutes: number;
 }
@@ -76,7 +60,7 @@ export function computeScientificStatGains(
 ): ScientificGainResult {
   const safeQty = Math.max(1, qty);
   const safeRpe = Math.max(5, Math.min(10, rpe));
-  const recMult = getRecoveryMultiplier(player.sleepCondition, player.nutritionCondition);
+  const baselineGameBalance = 0.95;
   const intensityFactor = +(0.65 + (safeRpe - 5) * 0.11).toFixed(2); // RPE 5 -> 0.65x, RPE 8 -> 0.98x, RPE 10 -> 1.20x
   const weightRatio = (player.weight || 65) / 65;
 
@@ -85,39 +69,39 @@ export function computeScientificStatGains(
   if (quest.category === 'FITNESS') {
     // Schoenfeld et al. (2017): Mechanical tension & volume load drive hypertrophy & strength
     if (quest.unitType === 'REPS') {
-      const effectiveLoad = (safeQty / 40) * weightRatio * intensityFactor * recMult;
+      const effectiveLoad = (safeQty / 40) * weightRatio * intensityFactor * baselineGameBalance;
       gains.str = +(0.14 * effectiveLoad).toFixed(2);
       gains.vit = +(0.07 * effectiveLoad).toFixed(2);
       gains.cha = +(0.04 * effectiveLoad).toFixed(2);
     } else {
       // Aerobic / Zone 2 VO2 adaptation
-      const cardioLoad = (safeQty / 30) * intensityFactor * recMult;
+      const cardioLoad = (safeQty / 30) * intensityFactor * baselineGameBalance;
       gains.vit = +(0.15 * cardioLoad).toFixed(2);
       gains.str = +(0.05 * cardioLoad).toFixed(2);
       gains.agi = +(0.04 * cardioLoad).toFixed(2);
     }
   } else if (quest.category === 'STUDY') {
     // Ericsson et al. (1993) & Dunlosky et al. (2013): Deliberate practice & active recall
-    const studyLoad = (safeQty / 45) * intensityFactor * recMult;
+    const studyLoad = (safeQty / 45) * intensityFactor * baselineGameBalance;
     gains.int = +(0.16 * studyLoad).toFixed(2);
     gains.agi = +(0.06 * studyLoad).toFixed(2);
   } else {
     // CAREER / DREAM WORK: Deep execution & communication/leadership
-    const workLoad = (safeQty / 60) * intensityFactor * recMult;
+    const workLoad = (safeQty / 60) * intensityFactor * baselineGameBalance;
     gains.agi = +(0.13 * workLoad).toFixed(2);
     gains.int = +(0.09 * workLoad).toFixed(2);
     gains.cha = +(0.07 * workLoad).toFixed(2);
   }
 
   const volumeScale = Math.min(2.0, Math.max(0.5, safeQty / Math.max(1, quest.defaultQty)));
-  const expEarned = Math.max(15, Math.round((quest.exp || 40) * intensityFactor * recMult * volumeScale));
+  const expEarned = Math.max(15, Math.round((quest.exp || 40) * intensityFactor * baselineGameBalance * volumeScale));
   const goldEarned = Math.max(10, Math.round((quest.gold || 35) * intensityFactor * volumeScale));
   const loggedMinutes =
     quest.unitType === 'MINUTES'
       ? Math.round(safeQty)
       : Math.max(10, Math.round((quest.estMinutes || 20) * volumeScale));
 
-  return { gains, expEarned, goldEarned, recMult, intensityFactor, loggedMinutes };
+  return { gains, expEarned, goldEarned, intensityFactor, loggedMinutes };
 }
 
 export function computeDailyDurationBreakdown(totalMinutes: number, bio?: Biometrics): DailyBreakdown {
@@ -642,99 +626,6 @@ export function createSyncedQuestsForActiveStep(
   ];
 }
 
-export function getDefaultDiscoveredPerks(
-  city: string,
-  profession: string,
-  interest: string,
-  lang: Language
-): DiscoveredPerk[] {
-  const loc = city || 'Surabaya';
-  const focus = interest || profession || (lang === 'id' ? 'Produktivitas' : 'Productivity');
-  if (lang === 'en') {
-    return [
-      {
-        id: 'perk_1',
-        type: 'INTERNET FREEBIE',
-        title: `Free Tier AI & Productivity Tools (${focus})`,
-        desc: 'Claim free student/creator credits & open-source templates to accelerate your daily workflow.',
-        cost: 0,
-        actionTip: 'Check GitHub Education Pack, Google Cloud Skills Boost, Notion, or free certification tracks.',
-        sourceUrl: 'https://www.cloudskillsboost.google/',
-      },
-      {
-        id: 'perk_2',
-        type: 'LOCAL DEAL',
-        title: `Happy Hour Coffee & Co-Working Promo in ${loc}`,
-        desc: `Explore local coffee shops & study spaces in ${loc} offering weekday morning or member discounts.`,
-        cost: 60,
-        actionTip: `Redeem 60 CR as your guilt-free budget reward to work from a cozy spot in ${loc}.`,
-      },
-    ];
-  }
-  return [
-    {
-      id: 'perk_1',
-      type: 'KLAIM GRATIS',
-      title: `Kursus & Sertifikat Gratis Terkait ${focus}`,
-      desc: 'Manfaatkan kelas gratis bersertifikat (Dicoding Beasiswa, Coursera Audit, Google Skillshop, atau Digitalent Komdigi).',
-      cost: 0,
-      actionTip: 'Klik "CARI DISKON & GRATISAN AI" untuk hasil terbaru yang dipersonalisasi oleh Agnes AI.',
-      sourceUrl: 'https://digitalent.komdigi.go.id/',
-    },
-    {
-      id: 'perk_2',
-      type: 'DISKON SEKITAR',
-      title: `Promo Kopi / Tempat Nugas & Gym Hemat di ${loc}`,
-      desc: `Kedai kopi lokal, tempat makan sehat, dan gym harian di sekitar ${loc} sering menyediakan promo member atau jam sepi.`,
-      cost: 60,
-      actionTip: `Tukar 60 CR untuk klaim jatah jajan/promo lokal di sekitar ${loc}!`,
-    },
-  ];
-}
-
-export function getDefaultGrowthNews(
-  city: string,
-  profession: string,
-  goal: string,
-  lang: Language
-): GrowthNewsItem[] {
-  const loc = city || 'Surabaya';
-  if (lang === 'en') {
-    return [
-      {
-        id: 'news_1',
-        tag: 'OPPORTUNITY',
-        title: `Free Digital & AI Upskilling Programs for ${profession}`,
-        summary: `Global & national initiatives open free micro-credential tracks to help you achieve "${goal}".`,
-        actionTask: `Research & enroll in 1 free certification for ${profession}`,
-      },
-      {
-        id: 'news_2',
-        tag: 'LOCAL COMMUNITY',
-        title: `Networking & Workshop Meetups in ${loc}`,
-        summary: `Joining local communities in ${loc} accelerates collaboration, mentorship, and career opportunities.`,
-        actionTask: `Find 1 local community or workshop event in ${loc}`,
-      },
-    ];
-  }
-  return [
-    {
-      id: 'news_1',
-      tag: 'PELUANG SKILL',
-      title: `Program Beasiswa & Pelatihan Gratis untuk ${profession}`,
-      summary: `Banyak program pelatihan gratis dari pemerintah, kampus, maupun platform global yang relevan untuk mewujudkan "${goal}".`,
-      actionTask: `Riset & daftar 1 pelatihan/sertifikasi gratis bidang ${profession}`,
-    },
-    {
-      id: 'news_2',
-      tag: 'KOMUNITAS & RELASI',
-      title: `Event, Komunitas & Peluang Kolaborasi di Sekitar ${loc}`,
-      summary: `Bergabung dengan komunitas praktisi di ${loc} membuka peluang proyek, mentor, dan informasi lowongan/usaha lebih cepat.`,
-      actionTask: `Cari & ikuti 1 komunitas/event bermanfaat di ${loc}`,
-    },
-  ];
-}
-
 export interface CreateProfileInput {
   name: string;
   gender: Gender;
@@ -814,13 +705,8 @@ export function createInitialPlayerProfile(input: CreateProfileInput): PlayerPro
     skillProgress: {},
     dreamSteps,
     rewards: getDefaultRewards(input.lang),
-    discoveredPerks: getDefaultDiscoveredPerks(
-      input.city || 'Surabaya',
-      profName,
-      input.rewardInterest,
-      input.lang
-    ),
-    growthNews: getDefaultGrowthNews(input.city || 'Surabaya', profName, input.goal, input.lang),
+    discoveredPerks: [],
+    growthNews: [],
     groundingSources: [],
     boss: {
       name: input.goal.trim(),
@@ -897,14 +783,8 @@ export function normalizePlayerProfile(raw: Partial<PlayerProfile>, lang: Langua
     skillProgress: raw.skillProgress && typeof raw.skillProgress === 'object' ? raw.skillProgress : {},
     dreamSteps,
     rewards: Array.isArray(raw.rewards) && raw.rewards.length > 0 ? raw.rewards : getDefaultRewards(lang),
-    discoveredPerks:
-      Array.isArray(raw.discoveredPerks) && raw.discoveredPerks.length > 0
-        ? raw.discoveredPerks
-        : getDefaultDiscoveredPerks(city, profession, rewardInterest, lang),
-    growthNews:
-      Array.isArray(raw.growthNews) && raw.growthNews.length > 0
-        ? raw.growthNews
-        : getDefaultGrowthNews(city, profession, goal, lang),
+    discoveredPerks: Array.isArray(raw.discoveredPerks) ? raw.discoveredPerks : [],
+    growthNews: Array.isArray(raw.growthNews) ? raw.growthNews : [],
     groundingSources: Array.isArray(raw.groundingSources) ? raw.groundingSources : [],
     boss: raw.boss ?? { name: goal, desc: goal, hp: 1000, maxHp: 1000 },
   };

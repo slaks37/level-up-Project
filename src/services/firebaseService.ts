@@ -47,6 +47,7 @@ import type {
 } from '../types';
 import { normalizePlayerProfile, PLAYER_SCHEMA_VERSION } from '../engine/science';
 import { loadRuntimeFirebaseConfig } from './storageService';
+import type { JournalEntry } from '../engine/journal';
 
 export const BOOTSTRAP_ADMIN_EMAIL = (
   import.meta.env.VITE_ADMIN_EMAIL || 'stefenlaksana.sl@gmail.com'
@@ -617,4 +618,22 @@ export async function fetchRecentDailyLogs(uid: string, maxCount = 14): Promise<
       nutritionCondition: data.nutritionCondition || 'balanced',
     };
   });
+}
+
+export function subscribeJournal(
+  uid: string,
+  onEntries: (entries: JournalEntry[]) => void,
+  onError: () => void,
+): Unsubscribe {
+  if (!firestoreDb) return () => {};
+  const entries = query(collection(firestoreDb, 'users', uid, 'journal'), orderBy('dateKey', 'desc'), limit(360));
+  return onSnapshot(entries, (snapshot) => {
+    onEntries(snapshot.docs.map((entry) => ({ ...entry.data(), id: entry.id }) as JournalEntry));
+  }, onError);
+}
+
+export async function saveJournalEntry(uid: string, entry: JournalEntry): Promise<void> {
+  if (!firestoreDb) throw new Error('Firestore unavailable');
+  const { id, ...data } = entry;
+  await setDoc(doc(firestoreDb, 'users', uid, 'journal', id), data);
 }

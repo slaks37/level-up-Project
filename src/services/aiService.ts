@@ -1,9 +1,7 @@
 import type {
   AIConfig,
   AIUsageLogRecord,
-  DiscoveredPerk,
   DreamStep,
-  GrowthNewsItem,
   Language,
   PlayerProfile,
   Quest,
@@ -11,9 +9,6 @@ import type {
 import {
   createDefaultDreamSteps,
   createSyncedQuestsForActiveStep,
-  getDefaultDiscoveredPerks,
-  getDefaultGrowthNews,
-  getRecoveryMultiplier,
 } from '../engine/science';
 import { getCurrentUserIdToken } from './firebaseService';
 
@@ -384,7 +379,6 @@ export async function generateAIDreamRoadmap(
 - Main Dream Goal: "${player.goal}"
 - Current Level: ${player.level}, Target Level: ${player.targetLevel}
 - Daily Time Budget: ${bd.total} minutes/day (${bd.study}m Study, ${bd.work}m Work, ${bd.fitness}m Fitness)
-- Biometrics: BMI ${player.bio.bmi} (${player.bio.bmiCategory}), Protein Target ${player.bio.proteinTarget}g/day
 - Language: ${lang === 'id' ? 'Bahasa Indonesia' : 'English'}
 
 Return ONLY a valid JSON object matching this exact structure:
@@ -497,18 +491,15 @@ export async function generateAIQuests(
   const activeStep =
     player.dreamSteps.find((s) => !s.completed) || player.dreamSteps[0];
   const bd = player.dailyBreakdown;
-  const recMult = getRecoveryMultiplier(player.sleepCondition, player.nutritionCondition);
 
   const systemPrompt =
     'You are an evidence-based daily habit & training planner for LEVEL UP SYSTEM. Always return valid JSON only.';
 
-  const userPrompt = `Generate 4 concrete daily tasks (1 STUDY, 1 CAREER, 2 FITNESS) synced to this user's active goal and body condition:
+  const userPrompt = `Generate 4 concrete daily tasks (1 STUDY, 1 CAREER, 2 FITNESS) synced to this user's active goal:
 - Profession: ${player.profession}
 - Main Goal: "${player.goal}"
 - Active Dream Milestone: "${activeStep.title}" (Core Skill: "${activeStep.skillName}")
 - Daily Duration Targets: Study ${bd.study}m, Work ${bd.work}m, Fitness ${bd.fitness}m
-- Biometrics: Age ${player.age}, Height ${player.height}cm, Weight ${player.weight}kg, BMI ${player.bio.bmi} (${player.bio.bmiCategory})
-- Today's Recovery Multiplier: ${recMult}x (Sleep: ${player.sleepCondition}, Nutrition: ${player.nutritionCondition}) — if < 0.9x make fitness slightly gentler/mobility-oriented!
 - Language: ${lang === 'id' ? 'Bahasa Indonesia' : 'English'}
 
 Return ONLY valid JSON:
@@ -595,146 +586,6 @@ Return ONLY valid JSON:
     const rawMsg = err instanceof Error ? err.message : String(err);
     return {
       quests: createSyncedQuestsForActiveStep(activeStep, bd, lang),
-      usedFallback: true,
-      errorMessage: rawMsg === 'API_KEY_MISSING' || rawMsg === 'PROXY_UNAVAILABLE' ? undefined : rawMsg,
-    };
-  }
-}
-
-// =========================================================================
-// 3. AI LOCAL DEALS, INTERNET FREEBIES & GROWTH NEWS DISCOVERY
-// =========================================================================
-export async function discoverPerksAndOpportunities(
-  player: PlayerProfile,
-  lang: Language,
-  config: AIConfig
-): Promise<{
-  perks: DiscoveredPerk[];
-  news: GrowthNewsItem[];
-  usedFallback: boolean;
-  viaSharedProxy?: boolean;
-  remainingToday?: number;
-  errorMessage?: string;
-}> {
-  const city = player.city || 'Surabaya';
-  const interest = player.rewardInterest || player.profession;
-
-  const systemPrompt =
-    'You are a practical career opportunities, free learning resources, and local lifestyle perk curator. Always return valid JSON only. Only include real, well-known official URLs when confident; otherwise leave sourceUrl empty string.';
-
-  const userPrompt = `Recommend personalized rewards, freebies, and growth opportunities for this user:
-- City / Area: ${city}
-- Profession: ${player.profession}
-- Main Goal: "${player.goal}"
-- Reward & Freebie Interests: "${interest}"
-- Language: ${lang === 'id' ? 'Bahasa Indonesia' : 'English'}
-
-Return ONLY valid JSON:
-{
-  "perks": [
-    {
-      "type": "${lang === 'id' ? 'DISKON SEKITAR' : 'LOCAL DEAL'}" or "${lang === 'id' ? 'KLAIM GRATIS' : 'INTERNET FREEBIE'}",
-      "title": "Short compelling title",
-      "desc": "Brief benefit description (max 18 words)",
-      "cost": 0,
-      "actionTip": "Practical step to claim or enjoy it",
-      "sourceUrl": ""
-    }
-  ],
-  "news": [
-    {
-      "tag": "${lang === 'id' ? 'PELUANG / BEASISWA / INSIGHT' : 'OPPORTUNITY / GRANT / INSIGHT'}",
-      "title": "Compelling opportunity or trend title",
-      "summary": "Why it helps the user level up (max 20 words)",
-      "actionTask": "Concrete 45-minute task title to act on this opportunity",
-      "sourceUrl": ""
-    }
-  ]
-}
-Provide 4 perks (2 local deals for ${city} with cost 50-90 CR, 2 free internet resources/tools with cost 0) and 3 growth opportunities.`;
-
-  try {
-    const res = await callOpenAICompatible(config, systemPrompt, userPrompt, 0.7, 'perks');
-    const parsed = extractJsonObject<{
-      perks?: Array<{
-        type?: string;
-        title?: string;
-        desc?: string;
-        cost?: number;
-        actionTip?: string;
-        sourceUrl?: string;
-      }>;
-      news?: Array<{
-        tag?: string;
-        title?: string;
-        summary?: string;
-        actionTask?: string;
-        sourceUrl?: string;
-      }>;
-    }>(res.content);
-
-    if (parsed && Array.isArray(parsed.perks) && parsed.perks.length > 0) {
-      const now = Date.now();
-      const perks: DiscoveredPerk[] = parsed.perks.slice(0, 6).map((p, idx) => {
-        const upperType = (p.type || '').toUpperCase();
-        const isFree = upperType.includes('GRATIS') || upperType.includes('FREE');
-        const validUrl =
-          p.sourceUrl && p.sourceUrl.startsWith('http') ? p.sourceUrl.trim() : '';
-        return {
-          id: `ai_perk_${now}_${idx}`,
-          type:
-            p.type?.trim() ||
-            (idx < 2
-              ? lang === 'id'
-                ? 'DISKON SEKITAR'
-                : 'LOCAL DEAL'
-              : lang === 'id'
-                ? 'KLAIM GRATIS'
-                : 'INTERNET FREEBIE'),
-          title: (p.title || 'Recommended Perk').trim().slice(0, 120),
-          desc: (p.desc || '').trim().slice(0, 220),
-          cost:
-            typeof p.cost === 'number' && p.cost >= 0
-              ? Math.round(p.cost)
-              : isFree
-                ? 0
-                : 60,
-          actionTip: (p.actionTip || '').trim().slice(0, 300),
-          ...(validUrl ? { sourceUrl: validUrl } : {}),
-        };
-      });
-
-      const news: GrowthNewsItem[] =
-        Array.isArray(parsed.news) && parsed.news.length > 0
-          ? parsed.news.slice(0, 5).map((n, idx) => {
-              const validUrl =
-                n.sourceUrl && n.sourceUrl.startsWith('http') ? n.sourceUrl.trim() : '';
-              return {
-                id: `ai_news_${now}_${idx}`,
-                tag: (n.tag || (lang === 'id' ? 'PELUANG' : 'OPPORTUNITY')).trim().slice(0, 32),
-                title: (n.title || 'Growth Opportunity').trim().slice(0, 140),
-                summary: (n.summary || '').trim().slice(0, 240),
-                actionTask: (n.actionTask || `Pelajari: ${n.title}`).trim().slice(0, 140),
-                ...(validUrl ? { sourceUrl: validUrl } : {}),
-              };
-            })
-          : getDefaultGrowthNews(city, player.profession, player.goal, lang);
-
-      return {
-        perks,
-        news,
-        usedFallback: false,
-        viaSharedProxy: res.viaSharedProxy,
-        remainingToday: res.remainingToday,
-      };
-    }
-
-    throw new Error('Invalid perks/news JSON structure');
-  } catch (err) {
-    const rawMsg = err instanceof Error ? err.message : String(err);
-    return {
-      perks: getDefaultDiscoveredPerks(city, player.profession, interest, lang),
-      news: getDefaultGrowthNews(city, player.profession, player.goal, lang),
       usedFallback: true,
       errorMessage: rawMsg === 'API_KEY_MISSING' || rawMsg === 'PROXY_UNAVAILABLE' ? undefined : rawMsg,
     };
