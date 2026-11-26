@@ -29,7 +29,9 @@ Admin mengelola email terverifikasi melalui panel Peran & Izin Admin. Admin meng
 
 Saat login, profil dibaca menurut akun Firebase dan cache perangkat juga dibatasi ke akun tersebut. Jika akun belum memiliki profil Cloud, pemain dapat memilih menyambungkan profil dan jurnal yang sudah dimiliki perangkat. Mood check-in tersinkron sebagai bagian dari jurnal pribadi. Renungan dan bahan doa disusun di perangkat dari mood, aktivitas, progres, dan agenda yang tersedia.
 
-Izin Google Calendar langsung menggunakan `calendar.events.owned.readonly`. Kedua domain harus menjadi JavaScript origin pada OAuth Web Client. Aktifkan `VITE_CALENDAR_OAUTH_ENABLED` setelah scope ini mendapatkan verifikasi Google. Impor .ics tersedia saat peninjauan berlangsung.
+Izin Google Calendar langsung menggunakan `calendar.events.owned.readonly`. Kedua domain harus menjadi JavaScript origin pada OAuth Web Client. Koneksi langsung Google Calendar otomatis aktif saat `VITE_GOOGLE_OAUTH_CLIENT_ID` terisi (kecuali `VITE_CALENDAR_OAUTH_ENABLED=false`), dengan impor `.ics` sebagai alternatif tambahan.
+
+Admin Control Center kini juga mengelola ekonomi **Koin Hadiah** (default 1 poin/koin per aktivitas tugas, workout, check-in, tahap impian, ekstrak core, tutup hari, dan naik level), pengaturan integrasi partner transaksi (seperti **MyValue**) dengan brankas rahasia di `adminSecrets/coinPartner`, penyesuaian saldo & ledger transaksi koin per peserta, serta pemantauan seluruh catatan peserta (profil, jurnal check-in, makan, tidur, mood, tugas, workout, peta impian, skill, kalender) beserta analisis kebiasaan dan kecenderungan peserta.
 
 ## Struktur Project
 

@@ -2,12 +2,15 @@ import { adminRoleLabels, assignableAdminRoles, canAuditUsage, canManageRoles, c
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
+  AlertTriangle,
   ArrowLeft,
   Ban,
   CheckCircle2,
+  Coins,
   Cpu,
   Eye,
   EyeOff,
+  Flame,
   KeyRound,
   Loader2,
   MailCheck,
@@ -18,12 +21,14 @@ import {
   Server,
   Shield,
   ShieldAlert,
+  TrendingUp,
   UserCheck,
   Users,
 } from 'lucide-react';
 import type { User } from 'firebase/auth';
 import type {
   AIUsageLogRecord,
+  CoinEconomyConfig,
   Language,
   SharedAIPublicConfig,
   UserAccountRecord,
@@ -35,13 +40,21 @@ import {
   fetchAdminAISecret,
   fetchAdminUsageLogs,
   fetchAllUsersForAdmin,
+  fetchCoinEconomyConfig,
+  fetchCoinPartnerSecret,
+  fetchParticipantFullRecord,
   fetchSharedAIPublicConfig,
   reloadCurrentUser,
   resetUserDailyQuota,
   saveAdminSharedAIConfig,
+  saveCoinEconomyConfig,
+  saveCoinPartnerSecret,
   sendCurrentUserVerificationEmail,
   updateUserStatusByAdmin,
+  type ParticipantFullRecord,
 } from '../services/firebaseService';
+import { DEFAULT_COIN_ECONOMY } from '../engine/science';
+import { AdminParticipantInspector } from './AdminParticipantInspector';
 import {
   AGNES_PRESET_MODELS,
   checkProxyServerHealth,
@@ -129,10 +142,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => { active = false; };
   }, [cloudUser, canConfigure]);
   const [userSearch, setUserSearch] = useState('');
+  const [userFilter, setUserFilter] = useState<'all' | 'alerts' | 'streaks'>('all');
   const [usageLogs, setUsageLogs] = useState<AIUsageLogRecord[]>([]);
   const [publicCfg, setPublicCfg] = useState<SharedAIPublicConfig | null>(null);
   const [sendingVerify, setSendingVerify] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Coin Economy & Partner (MyValue) Config state
+  const [coinConfig, setCoinConfig] = useState<CoinEconomyConfig>({ ...DEFAULT_COIN_ECONOMY });
+  const [partnerMerchantId, setPartnerMerchantId] = useState('');
+  const [partnerApiKey, setPartnerApiKey] = useState('');
+  const [partnerWebhookSecret, setPartnerWebhookSecret] = useState('');
+  const [showPartnerSecrets, setShowPartnerSecrets] = useState(false);
+  const [savingCoinsConfig, setSavingCoinsConfig] = useState(false);
+
+  // Participant Deep Inspector state
+  const [selectedUserUid, setSelectedUserUid] = useState<string | null>(null);
+  const [selectedRecord, setSelectedRecord] = useState<ParticipantFullRecord | null>(null);
+  const [loadingInspector, setLoadingInspector] = useState(false);
+
+  const openParticipantInspector = useCallback(
+    async (uid: string) => {
+      setSelectedUserUid(uid);
+      setLoadingInspector(true);
+      try {
+        const rec = await fetchParticipantFullRecord(uid, lang);
+        setSelectedRecord(rec);
+      } catch (err) {
+        onNotify(err instanceof Error ? err.message : String(err), 'error');
+      } finally {
+        setLoadingInspector(false);
+      }
+    },
+    [lang, onNotify]
+  );
 
   const loadAdminData = useCallback(async () => {
     if (!cloudUser || !adminRole) {
@@ -144,7 +187,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     try {
       const errors: string[] = [];
-      const [pub, secret, allUsers, fsLogs, health] = await Promise.all([
+      const [pub, secret, allUsers, fsLogs, health, coinCfg, partnerSec] = await Promise.all([
         fetchSharedAIPublicConfig().catch((e) => {
           errors.push(`appConfig: ${e instanceof Error ? e.message : String(e)}`);
           return null;
@@ -159,12 +202,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }),
         canAudit ? fetchAdminUsageLogs(40).catch(() => []) : Promise.resolve([]),
         checkProxyServerHealth(localProxyUrl).catch(() => null),
+        fetchCoinEconomyConfig().catch(() => ({ ...DEFAULT_COIN_ECONOMY })),
+        canConfigure ? fetchCoinPartnerSecret().catch(() => null) : Promise.resolve(null),
       ]);
       if (errors.length > 0) setLoadError(errors.join(' | '));
 
       setPublicCfg(pub);
       setUsers(allUsers);
       setProxyHealth(health);
+      setCoinConfig(coinCfg);
+      if (partnerSec) {
+        setPartnerMerchantId(partnerSec.merchantId || '');
+        setPartnerApiKey(partnerSec.apiKey || '');
+        setPartnerWebhookSecret(partnerSec.webhookSecret || '');
+      }
 
       if (secret) {
         setBaseUrl(secret.baseUrl || 'https://apihub.agnes-ai.com/v1');
@@ -210,6 +261,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     void loadAdminData();
   }, [loadAdminData]);
+
+  const handleSaveCoinEconomy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cloudUser || !canConfigure) return;
+    setSavingCoinsConfig(true);
+    try {
+      await saveCoinEconomyConfig(cloudUser, {
+        coinName: coinConfig.coinName,
+        coinSymbol: coinConfig.coinSymbol,
+        pointPerTask: coinConfig.pointPerTask,
+        pointPerWorkout: coinConfig.pointPerWorkout,
+        pointPerCheckIn: coinConfig.pointPerCheckIn,
+        pointPerMilestone: coinConfig.pointPerMilestone,
+        pointPerOverdrive: coinConfig.pointPerOverdrive,
+        pointPerDayClear: coinConfig.pointPerDayClear,
+        pointPerLevelUp: coinConfig.pointPerLevelUp,
+        startingCoins: coinConfig.startingCoins,
+        idrPerCoin: coinConfig.idrPerCoin,
+        partnerName: coinConfig.partnerName,
+        partnerEnabled: coinConfig.partnerEnabled,
+        partnerEndpoint: coinConfig.partnerEndpoint,
+        minRedeemCoins: coinConfig.minRedeemCoins,
+        transactionNote: coinConfig.transactionNote,
+      });
+      await saveCoinPartnerSecret(cloudUser, {
+        partnerName: coinConfig.partnerName,
+        merchantId: partnerMerchantId,
+        apiEndpoint: coinConfig.partnerEndpoint,
+        apiKey: partnerApiKey,
+        webhookSecret: partnerWebhookSecret,
+      });
+      onNotify(
+        lang === 'id'
+          ? 'Pengaturan Koin Hadiah & Integrasi Transaksi berhasil disimpan!'
+          : 'Reward Coin Economy & Partner Integration settings saved!',
+        'success'
+      );
+      await loadAdminData();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setSavingCoinsConfig(false);
+    }
+  };
 
   const handleSaveSharedConfig = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -406,17 +501,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }
 
   const filteredUsers = users.filter((u) => {
+    const t = u.telemetry;
+    if (userFilter === 'alerts' && !(t?.hasPainAlert || t?.projectBlocked || (t?.lastSleepHours !== null && t?.lastSleepHours !== undefined && t.lastSleepHours < 7))) {
+      return false;
+    }
+    if (userFilter === 'streaks' && !((t?.streak ?? 0) > 0 || (t?.taskStreak ?? 0) > 0 || (t?.workoutStreak ?? 0) > 0)) {
+      return false;
+    }
     const q = userSearch.toLowerCase().trim();
     if (!q) return true;
     return (
       u.email.toLowerCase().includes(q) ||
       u.displayName.toLowerCase().includes(q) ||
-      u.role.toLowerCase().includes(q)
+      u.role.toLowerCase().includes(q) ||
+      (t?.profession || '').toLowerCase().includes(q) ||
+      (t?.goal || '').toLowerCase().includes(q)
     );
   });
 
+  const selectedUser = selectedUserUid ? users.find((u) => u.ownerUid === selectedUserUid) || null : null;
   const totalAIRequests = users.reduce((sum, u) => sum + (u.aiTotalRequests || 0), 0);
   const activeUsersCount = users.filter((u) => u.status !== 'suspended').length;
+  const totalCoinsCirculating = users.reduce((sum, u) => sum + (u.telemetry?.gold || 0), 0);
+  const activeStreakUsersCount = users.filter(
+    (u) => (u.telemetry?.streak || 0) > 0 || (u.telemetry?.taskStreak || 0) > 0 || (u.telemetry?.workoutStreak || 0) > 0
+  ).length;
+  const alertUsersCount = users.filter(
+    (u) => u.telemetry?.hasPainAlert || u.telemetry?.projectBlocked
+  ).length;
+  const symbol = coinConfig.coinSymbol || 'KOIN';
 
   return (
     <section className="space-y-5 pb-10">
@@ -458,15 +571,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           Firestore Diagnostic: {loadError}
         </div>
       )}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         <div className="anime-panel p-3.5">
           <span className="font-mono text-[10px] text-slate-500 flex items-center gap-1">
             <Users className="w-3.5 h-3.5 text-sky-600" />
-            TOTAL USERS
+            TOTAL PESERTA
           </span>
           <p className="font-hud font-bold text-2xl text-slate-900 mt-1">{users.length}</p>
           <p className="text-[11px] text-emerald-700 font-semibold">
             {activeUsersCount} {lang === 'id' ? 'aktif' : 'active'}
+          </p>
+        </div>
+
+        <div className="anime-panel p-3.5">
+          <span className="font-mono text-[10px] text-slate-500 flex items-center gap-1">
+            <Coins className="w-3.5 h-3.5 text-amber-600" />
+            TOTAL {symbol}
+          </span>
+          <p className="font-hud font-bold text-2xl text-amber-800 mt-1">{totalCoinsCirculating}</p>
+          <p className="text-[11px] text-slate-500 truncate">
+            {coinConfig.partnerName || 'MyValue'} · {coinConfig.partnerEnabled ? 'AKTIF' : 'SIAP'}
+          </p>
+        </div>
+
+        <div className="anime-panel p-3.5">
+          <span className="font-mono text-[10px] text-slate-500 flex items-center gap-1">
+            <Flame className="w-3.5 h-3.5 text-orange-600" />
+            STREAK AKTIF
+          </span>
+          <p className="font-hud font-bold text-2xl text-orange-700 mt-1">{activeStreakUsersCount}</p>
+          <p className="text-[11px] text-slate-500">
+            {alertUsersCount > 0 ? `⚠️ ${alertUsersCount} perlu perhatian` : (lang === 'id' ? 'Semua aman' : 'All healthy')}
           </p>
         </div>
 
@@ -517,6 +652,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </p>
         </div>
       </div>
+
+      {/* Selected Participant Deep Inspector (Records, Habits, Tendencies & Coin Editing) */}
+      {selectedUser && (
+        <AdminParticipantInspector
+          user={selectedUser}
+          record={selectedRecord}
+          loading={loadingInspector}
+          lang={lang}
+          coinConfig={coinConfig}
+          adminUser={cloudUser}
+          canEditCoins={canConfigure}
+          onRefresh={() => openParticipantInspector(selectedUser.ownerUid)}
+          onCoinUpdated={(uid, nextBalance) => {
+            setUsers((prev) =>
+              prev.map((u) =>
+                u.ownerUid === uid && u.telemetry
+                  ? { ...u, telemetry: { ...u.telemetry, gold: nextBalance } }
+                  : u
+              )
+            );
+          }}
+          onNotify={onNotify}
+          onClose={() => {
+            setSelectedUserUid(null);
+            setSelectedRecord(null);
+          }}
+        />
+      )}
 
       {/* Main Grid: Shared AI Config + Audit Logs */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
@@ -826,22 +989,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>}
       </div>
 
-      {/* User Management Directory */}
+      {/* User Management, Records, Habits & Coins Directory */}
       <div className="anime-panel overflow-hidden">
         <div className="blender-bar px-4 py-2 flex flex-wrap items-center justify-between gap-2">
           <span className="font-mono text-[10px] font-bold text-slate-800 flex items-center gap-1.5">
             <Users className="w-3.5 h-3.5 text-sky-600" />
-            USER MANAGEMENT & QUOTA DIRECTORY (FIRESTORE `users`)
+            {lang === 'id'
+              ? 'DIREKTORI PESERTA, REKAM CATATAN, KEBIASAAN & KOIN'
+              : 'PARTICIPANT DIRECTORY, RECORDS, HABITS & COINS'}
           </span>
-          <div className="relative w-full sm:w-64">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
-            <input
-              type="text"
-              value={userSearch}
-              onChange={(e) => setUserSearch(e.target.value)}
-              placeholder={lang === 'id' ? 'Cari nama / email...' : 'Search name / email...'}
-              className="w-full pl-8 pr-2.5 py-1 rounded bg-white border border-slate-300 text-xs focus:outline-none focus:border-sky-600"
-            />
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex gap-1">
+              {([
+                ['all', lang === 'id' ? 'Semua' : 'All'],
+                ['streaks', lang === 'id' ? 'Streak Aktif' : 'Active Streaks'],
+                ['alerts', lang === 'id' ? 'Perlu Perhatian' : 'Alerts'],
+              ] as const).map(([f, label]) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setUserFilter(f)}
+                  className={`px-2 py-1 rounded text-[10px] font-bold transition ${
+                    userFilter === f
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-white border border-slate-300 text-slate-700 hover:border-sky-400'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="relative w-full sm:w-64">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+              <input
+                type="text"
+                value={userSearch}
+                onChange={(e) => setUserSearch(e.target.value)}
+                placeholder={lang === 'id' ? 'Cari nama, email, profesi...' : 'Search name, email, role...'}
+                className="w-full pl-8 pr-2.5 py-1 rounded bg-white border border-slate-300 text-xs focus:outline-none focus:border-sky-600"
+              />
+            </div>
           </div>
         </div>
 
@@ -849,103 +1036,416 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 font-mono text-[10px] text-slate-600 uppercase">
               <tr>
-                <th className="px-4 py-2.5">User</th>
-                <th className="px-3 py-2.5">Role</th>
-                <th className="px-3 py-2.5">Status</th>
-                <th className="px-3 py-2.5">AI Usage</th>
-                <th className="px-4 py-2.5 text-right">Actions</th>
+                <th className="px-4 py-2.5">{lang === 'id' ? 'Peserta' : 'Participant'}</th>
+                <th className="px-3 py-2.5">{coinConfig.coinName}</th>
+                <th className="px-3 py-2.5">Streak (H / T / W)</th>
+                <th className="px-3 py-2.5">{lang === 'id' ? 'Kebiasaan & Sinyal' : 'Habits & Signals'}</th>
+                <th className="px-3 py-2.5">Role / Status</th>
+                <th className="px-3 py-2.5">AI</th>
+                <th className="px-4 py-2.5 text-right">{lang === 'id' ? 'Aksi' : 'Actions'}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-6 text-center text-slate-400 italic">
-                    {lang === 'id' ? 'Belum ada user terdaftar.' : 'No registered users found.'}
+                  <td colSpan={7} className="px-4 py-6 text-center text-slate-400 italic">
+                    {lang === 'id' ? 'Belum ada peserta yang cocok.' : 'No matching participants found.'}
                   </td>
                 </tr>
               ) : (
                 filteredUsers.map((u) => {
                   const grantRole = canConfigure ? roleGrants.find((grant) => grant.email === u.email.toLowerCase())?.role : undefined;
                   const displayedRole = grantRole || u.role;
-                  return <tr key={u.ownerUid} className="hover:bg-slate-50/70">
-                    <td className="px-4 py-2.5">
-                      <p className="font-hud font-bold text-slate-900">{u.displayName}</p>
-                      <p className="font-mono text-[10px] text-slate-500">{u.email}</p>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <span
-                        className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                          u.role === 'admin'
-                            ? 'bg-slate-900 text-orange-400'
-                            : 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        {displayedRole === 'user' ? 'Player' : adminRoleLabels[displayedRole]}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <span
-                        className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                          u.status === 'suspended'
-                            ? 'bg-rose-100 text-rose-800'
-                            : 'bg-emerald-100 text-emerald-800'
-                        }`}
-                      >
-                        {u.status}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 font-mono text-[11px] text-slate-700">
-                      <span>
-                        {u.aiRequestsToday}/{dailyLimit} today
-                      </span>
-                      <span className="block text-[10px] text-slate-400">
-                        Total: {u.aiTotalRequests}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {canOperate && (canConfigure || u.role === 'user') && <><button
-                          type="button"
-                          onClick={() => void handleResetQuota(u)}
-                          className="p-1.5 rounded border border-slate-300 bg-white hover:bg-sky-50 text-sky-700"
-                          title={lang === 'id' ? 'Reset Kuota Hari Ini' : 'Reset Daily Quota'}
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleToggleUserStatus(u)}
-                          className={`p-1.5 rounded border ${
-                            u.status === 'suspended'
-                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                              : 'border-rose-300 bg-rose-50 text-rose-700'
+                  const t = u.telemetry;
+                  const isSelected = selectedUserUid === u.ownerUid;
+                  return (
+                    <tr key={u.ownerUid} className={isSelected ? 'bg-sky-50' : 'hover:bg-slate-50/70'}>
+                      <td className="px-4 py-2.5">
+                        <p className="font-hud font-bold text-slate-900">
+                          {t?.name || u.displayName}
+                          {t ? <span className="ml-1.5 font-mono text-[10px] text-orange-700">Lv.{t.level}</span> : null}
+                        </p>
+                        <p className="font-mono text-[10px] text-slate-500">{u.email}</p>
+                        {t?.profession && (
+                          <p className="text-[10px] text-slate-600 truncate max-w-[200px]">{t.profession}</p>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 font-mono">
+                        <span className="font-bold text-amber-800">
+                          {t ? `${t.gold} ${symbol}` : '—'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 font-mono text-[11px]">
+                        {t ? (
+                          <div className="space-y-0.5">
+                            <span className="font-bold text-orange-700">🔥 {t.streak}h</span>
+                            <span className="block text-[10px] text-slate-600">
+                              Tugas {t.taskStreak}h · Workout {t.workoutStreak}h
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-[11px]">
+                        {t ? (
+                          <div className="space-y-0.5">
+                            <p className="text-slate-700">
+                              {t.completedTasksTotal} tugas · {t.completedWorkoutsTotal} workout
+                            </p>
+                            <p className="text-[10px] text-slate-500">
+                              {t.lastMood ? `Mood: ${t.lastMood}` : ''}
+                              {t.lastSleepHours !== null ? ` · Tidur ${t.lastSleepHours}j` : ''}
+                              {t.lastActiveDate ? ` · ${t.lastActiveDate}` : ''}
+                            </p>
+                            {(t.hasPainAlert || t.projectBlocked) && (
+                              <div className="flex flex-wrap gap-1 pt-0.5">
+                                {t.hasPainAlert && (
+                                  <span className="inline-flex items-center gap-0.5 rounded bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold text-rose-800">
+                                    <AlertTriangle className="w-2.5 h-2.5" /> Nyeri Latihan
+                                  </span>
+                                )}
+                                {t.projectBlocked && (
+                                  <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-900">
+                                    Proyek Terhambat
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 italic">
+                            {lang === 'id' ? 'Klik Detail untuk muat data' : 'Click Inspect to load'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 space-y-1">
+                        <span
+                          className={`inline-block font-mono text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                            u.role === 'admin'
+                              ? 'bg-slate-900 text-orange-400'
+                              : 'bg-slate-100 text-slate-700'
                           }`}
-                          title={
-                            u.status === 'suspended'
-                              ? lang === 'id'
-                                ? 'Aktifkan User'
-                                : 'Activate User'
-                              : lang === 'id'
-                                ? 'Tangguhkan User'
-                                : 'Suspend User'
-                          }
                         >
-                          {u.status === 'suspended' ? (
-                            <UserCheck className="w-3.5 h-3.5" />
-                          ) : (
-                            <Ban className="w-3.5 h-3.5" />
+                          {displayedRole === 'user' ? 'Player' : adminRoleLabels[displayedRole]}
+                        </span>
+                        <span
+                          className={`ml-1 inline-block font-mono text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                            u.status === 'suspended'
+                              ? 'bg-rose-100 text-rose-800'
+                              : 'bg-emerald-100 text-emerald-800'
+                          }`}
+                        >
+                          {u.status}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 font-mono text-[11px] text-slate-700">
+                        <span>{u.aiRequestsToday}/{dailyLimit}</span>
+                        <span className="block text-[10px] text-slate-400">Tot: {u.aiTotalRequests}</span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => void openParticipantInspector(u.ownerUid)}
+                            className="px-2.5 py-1.5 rounded bg-sky-700 hover:bg-sky-800 text-white font-hud font-bold text-[10px] uppercase flex items-center gap-1"
+                            title={lang === 'id' ? 'Lihat seluruh catatan, kebiasaan & edit koin peserta' : 'Inspect records, habits & edit coins'}
+                          >
+                            <TrendingUp className="w-3 h-3" />
+                            <span>{lang === 'id' ? 'Detail & Koin' : 'Inspect'}</span>
+                          </button>
+                          {canOperate && (canConfigure || u.role === 'user') && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void handleResetQuota(u)}
+                                className="p-1.5 rounded border border-slate-300 bg-white hover:bg-sky-50 text-sky-700"
+                                title={lang === 'id' ? 'Reset Kuota Hari Ini' : 'Reset Daily Quota'}
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleToggleUserStatus(u)}
+                                className={`p-1.5 rounded border ${
+                                  u.status === 'suspended'
+                                    ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                                    : 'border-rose-300 bg-rose-50 text-rose-700'
+                                }`}
+                                title={
+                                  u.status === 'suspended'
+                                    ? lang === 'id'
+                                      ? 'Aktifkan User'
+                                      : 'Activate User'
+                                    : lang === 'id'
+                                      ? 'Tangguhkan User'
+                                      : 'Suspend User'
+                                }
+                              >
+                                {u.status === 'suspended' ? (
+                                  <UserCheck className="w-3.5 h-3.5" />
+                                ) : (
+                                  <Ban className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </>
                           )}
-                        </button>
-                        </>}
-                      </div>
-                    </td>
-                  </tr>;
+                        </div>
+                      </td>
+                    </tr>
+                  );
                 })
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Reward Coin Economy & Partner (MyValue) Settings */}
+      {canConfigure && (
+        <section className="anime-panel overflow-hidden">
+          <div className="blender-bar px-4 py-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="font-mono text-[10px] font-bold text-amber-900 flex items-center gap-1.5">
+              <Coins className="w-3.5 h-3.5 text-amber-600" />
+              {lang === 'id'
+                ? 'PENGATURAN KOIN HADIAH & INTEGRASI TRANSAKSI (MYVALUE / PARTNER)'
+                : 'REWARD COIN ECONOMY & TRANSACTION PARTNER SETTINGS (MYVALUE)'}
+            </span>
+            <span className="font-mono text-[9px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">
+              {coinConfig.partnerName || 'MyValue'} · {coinConfig.partnerEnabled ? 'AKTIF' : 'SIAP KONEKSI'}
+            </span>
+          </div>
+
+          <form onSubmit={(e) => void handleSaveCoinEconomy(e)} className="p-4 space-y-4 text-xs">
+            <p className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-950">
+              {lang === 'id'
+                ? 'Atur jumlah koin hadiah per aksi (default 1 koin per aktivitas agar aman untuk transaksi nyata), nilai tukar IDR, dan kredensial integrasi MyValue / partner transaksi lainnya. Perubahan langsung aktif ke seluruh peserta.'
+                : 'Configure reward coins earned per action (default 1 coin per activity for real-value transactions), IDR conversion rate, and MyValue / external partner integration settings.'}
+            </p>
+
+            {/* Identity & Conversion */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              <label className="block space-y-1 font-bold text-slate-700">
+                <span>{lang === 'id' ? 'Nama Koin' : 'Coin Name'}</span>
+                <input
+                  type="text"
+                  required
+                  maxLength={60}
+                  value={coinConfig.coinName}
+                  onChange={(e) => setCoinConfig((c) => ({ ...c, coinName: e.target.value }))}
+                  className="w-full px-2.5 py-1.5 rounded border border-slate-300 text-xs font-normal"
+                />
+              </label>
+              <label className="block space-y-1 font-bold text-slate-700">
+                <span>{lang === 'id' ? 'Simbol Koin' : 'Coin Symbol'}</span>
+                <input
+                  type="text"
+                  required
+                  maxLength={16}
+                  value={coinConfig.coinSymbol}
+                  onChange={(e) => setCoinConfig((c) => ({ ...c, coinSymbol: e.target.value }))}
+                  className="w-full px-2.5 py-1.5 rounded border border-slate-300 font-mono text-xs font-normal"
+                />
+              </label>
+              <label className="block space-y-1 font-bold text-slate-700">
+                <span>{lang === 'id' ? 'Koin Awal Peserta Baru' : 'Starting Coins'}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10000}
+                  value={coinConfig.startingCoins}
+                  onChange={(e) => setCoinConfig((c) => ({ ...c, startingCoins: Math.max(0, Number(e.target.value) || 0) }))}
+                  className="w-full px-2.5 py-1.5 rounded border border-slate-300 font-mono text-xs font-normal"
+                />
+              </label>
+              <label className="block space-y-1 font-bold text-slate-700">
+                <span>{lang === 'id' ? 'Nilai Tukar (Rp / 1 Koin)' : 'IDR per 1 Coin'}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1000000}
+                  step="any"
+                  value={coinConfig.idrPerCoin}
+                  onChange={(e) => setCoinConfig((c) => ({ ...c, idrPerCoin: Math.max(0, Number(e.target.value) || 0) }))}
+                  className="w-full px-2.5 py-1.5 rounded border border-slate-300 font-mono text-xs font-normal"
+                />
+              </label>
+              <label className="block space-y-1 font-bold text-slate-700">
+                <span>{lang === 'id' ? 'Minimal Tukar Transaksi' : 'Min Redeem Coins'}</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100000}
+                  value={coinConfig.minRedeemCoins}
+                  onChange={(e) => setCoinConfig((c) => ({ ...c, minRedeemCoins: Math.max(1, Number(e.target.value) || 1) }))}
+                  className="w-full px-2.5 py-1.5 rounded border border-slate-300 font-mono text-xs font-normal"
+                />
+              </label>
+            </div>
+
+            {/* Points Per Action */}
+            <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">
+              <p className="font-mono text-[10px] font-bold uppercase text-slate-700">
+                {lang === 'id' ? 'POIN / KOIN PER AKTIVITAS PESERTA (DEFAULT: 1)' : 'COINS EARNED PER ACTION (DEFAULT: 1)'}
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                {([
+                  ['pointPerTask', lang === 'id' ? 'Tugas Selesai' : 'Task Done'],
+                  ['pointPerWorkout', lang === 'id' ? 'Workout' : 'Workout'],
+                  ['pointPerCheckIn', lang === 'id' ? 'Check-in Baru' : 'New Check-in'],
+                  ['pointPerMilestone', lang === 'id' ? 'Tahap Impian' : 'Milestone'],
+                  ['pointPerOverdrive', lang === 'id' ? 'Ekstrak Core' : 'Core Bonus'],
+                  ['pointPerDayClear', lang === 'id' ? 'Tutup Hari' : 'Day Clear'],
+                  ['pointPerLevelUp', lang === 'id' ? 'Naik Level' : 'Level Up'],
+                ] as const).map(([key, label]) => (
+                  <label key={key} className="block space-y-1 text-[11px] font-semibold text-slate-700">
+                    <span className="block truncate">{label}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1000}
+                      value={coinConfig[key]}
+                      onChange={(e) =>
+                        setCoinConfig((c) => ({
+                          ...c,
+                          [key]: Math.max(0, Math.min(1000, Number(e.target.value) || 0)),
+                        }))
+                      }
+                      className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white font-mono text-xs"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* External Transaction Partner (MyValue / etc.) */}
+            <div className="rounded border border-slate-200 bg-white p-3 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-bold text-slate-900">
+                    {lang === 'id'
+                      ? 'Integrasi Partner Transaksi (MyValue / Loyalty Partner)'
+                      : 'Transaction Partner Integration (MyValue / Loyalty Partner)'}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    {lang === 'id'
+                      ? 'API Key & Webhook Secret disimpan aman di adminSecrets/coinPartner (khusus Admin, tidak terekspos ke browser peserta).'
+                      : 'API Key & Webhook Secret are stored in admin-only adminSecrets/coinPartner (zero client leak).'}
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 font-bold text-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={coinConfig.partnerEnabled}
+                    onChange={(e) => setCoinConfig((c) => ({ ...c, partnerEnabled: e.target.checked }))}
+                    className="w-4 h-4 accent-emerald-600"
+                  />
+                  <span>{lang === 'id' ? 'Aktifkan Transaksi Partner' : 'Enable Partner Transactions'}</span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <label className="block space-y-1 font-bold text-slate-700">
+                  <span>{lang === 'id' ? 'Nama Partner Transaksi' : 'Partner Name'}</span>
+                  <input
+                    type="text"
+                    maxLength={80}
+                    value={coinConfig.partnerName}
+                    onChange={(e) => setCoinConfig((c) => ({ ...c, partnerName: e.target.value }))}
+                    placeholder="MyValue"
+                    className="w-full px-2.5 py-1.5 rounded border border-slate-300 text-xs font-normal"
+                  />
+                </label>
+                <label className="block space-y-1 font-bold text-slate-700">
+                  <span>{lang === 'id' ? 'URL Endpoint API / Webhook (Opsional)' : 'Partner API / Webhook URL (Optional)'}</span>
+                  <input
+                    type="url"
+                    maxLength={300}
+                    value={coinConfig.partnerEndpoint}
+                    onChange={(e) => setCoinConfig((c) => ({ ...c, partnerEndpoint: e.target.value }))}
+                    placeholder="https://api.myvalue.id/v1/..."
+                    className="w-full px-2.5 py-1.5 rounded border border-slate-300 font-mono text-[11px] font-normal"
+                  />
+                </label>
+                <label className="block space-y-1 font-bold text-slate-700">
+                  <span>Merchant / Partner ID (Admin Vault)</span>
+                  <input
+                    type="text"
+                    maxLength={120}
+                    value={partnerMerchantId}
+                    onChange={(e) => setPartnerMerchantId(e.target.value)}
+                    placeholder="MERCHANT-LEVELUP"
+                    className="w-full px-2.5 py-1.5 rounded border border-slate-300 font-mono text-[11px] font-normal"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className="block space-y-1 font-bold text-slate-700">
+                  <span>Partner API Key (Admin Vault)</span>
+                  <div className="relative">
+                    <input
+                      type={showPartnerSecrets ? 'text' : 'password'}
+                      maxLength={500}
+                      autoComplete="off"
+                      value={partnerApiKey}
+                      onChange={(e) => setPartnerApiKey(e.target.value)}
+                      placeholder="mv_live_..."
+                      className="w-full pl-2.5 pr-9 py-1.5 rounded border border-slate-300 font-mono text-[11px] font-normal"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPartnerSecrets((v) => !v)}
+                      className="absolute right-2 top-1.5 text-slate-500 hover:text-slate-900"
+                    >
+                      {showPartnerSecrets ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </label>
+                <label className="block space-y-1 font-bold text-slate-700">
+                  <span>Webhook Signing Secret (Admin Vault)</span>
+                  <input
+                    type={showPartnerSecrets ? 'text' : 'password'}
+                    maxLength={500}
+                    autoComplete="off"
+                    value={partnerWebhookSecret}
+                    onChange={(e) => setPartnerWebhookSecret(e.target.value)}
+                    placeholder="whsec_..."
+                    className="w-full px-2.5 py-1.5 rounded border border-slate-300 font-mono text-[11px] font-normal"
+                  />
+                </label>
+              </div>
+
+              <label className="block space-y-1 font-bold text-slate-700">
+                <span>{lang === 'id' ? 'Info Transaksi untuk Peserta (Opsional)' : 'Transaction Notice for Participants (Optional)'}</span>
+                <input
+                  type="text"
+                  maxLength={300}
+                  value={coinConfig.transactionNote}
+                  onChange={(e) => setCoinConfig((c) => ({ ...c, transactionNote: e.target.value }))}
+                  placeholder={
+                    lang === 'id'
+                      ? 'Contoh: Kumpulkan koin hadiah dari tugas & workout, segera bisa ditukar via MyValue!'
+                      : 'Example: Earn coins from tasks & workouts, redeemable via MyValue!'
+                  }
+                  className="w-full px-2.5 py-1.5 rounded border border-slate-300 text-xs font-normal"
+                />
+              </label>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={savingCoinsConfig}
+                className="py-2.5 px-4 rounded bg-amber-600 hover:bg-amber-700 text-white font-hud font-bold text-xs uppercase flex items-center gap-1.5 btn-anime"
+              >
+                {savingCoinsConfig ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                <span>{lang === 'id' ? 'SIMPAN PENGATURAN KOIN & PARTNER' : 'SAVE COIN & PARTNER SETTINGS'}</span>
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
     </section>
   );
 };

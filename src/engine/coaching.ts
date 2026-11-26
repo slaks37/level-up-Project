@@ -236,7 +236,7 @@ export function newWorkoutQuest(item: { title: string; minutes?: number; sets?: 
   return {
     id: 'gym-' + crypto.randomUUID(), title: item.title, category: 'FITNESS', unitType: workout ? 'REPS' : 'MINUTES',
     defaultQty: workout ? workout.sets * workout.reps : item.minutes || 10,
-    skillTag: workout ? 'Latihan kekuatan' : 'Stamina', exp: 35, gold: 25, completed: false,
+    skillTag: workout ? 'Latihan kekuatan' : 'Stamina', exp: 20, gold: 1, completed: false,
     ...(workout ? { workout } : {}),
   };
 }

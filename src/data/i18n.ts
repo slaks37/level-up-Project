@@ -46,7 +46,7 @@ export const I18N = {
 
     profilePanelTitle: 'STATUS & 5 KEMAMPUAN UTAMA',
     lblCredits: 'KOIN HADIAH',
-    lblStreak: 'RUTIN HARIAN',
+    lblStreak: 'STREAK HARIAN',
     lblAbilitiesTitle: 'KEMAMPUAN TERUKUR (NAIK DARI AKSI NYATA)',
     bioPanelTitle: 'KONDISI TUBUH & PEMULIHAN HARI INI',
     btnEditBio: 'UBAH TB/BB',
@@ -77,7 +77,7 @@ export const I18N = {
     btnDailyClearLbl: 'TUTUP HARI INI',
 
     dreamPanelTitle: 'PETA IMPIAN',
-    btnAiRoadmapLbl: 'RINCI DENGAN AGNES',
+    btnAiRoadmapLbl: 'BUAT RANCANGAN DETAIL IMPIANKU',
     dreamGoalLabel: 'IMPIAN UTAMAMU:',
     btnAddStepLbl: 'TAMBAH LANGKAH KE PETA IMPIAN',
     dreamNearZero: 'Jarak ke impian: Mulai langkah pertama!',
@@ -194,7 +194,7 @@ export const I18N = {
     btnDailyClearLbl: 'COMPLETE DAY',
 
     dreamPanelTitle: 'DREAM ROADMAP',
-    btnAiRoadmapLbl: 'SPLIT WITH AGNES',
+    btnAiRoadmapLbl: 'BUILD MY DETAILED DREAM PLAN',
     dreamGoalLabel: 'YOUR MAIN DREAM:',
     btnAddStepLbl: 'ADD STEP TO DREAM ROADMAP',
     dreamNearZero: 'Distance to dream: Take your first step!',

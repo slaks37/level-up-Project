@@ -3,6 +3,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import type {
   AIConfig,
+  CoinEconomyConfig,
+  CoinTransactionRecord,
+  CoinTransactionSource,
+  CoinTransactionType,
   DailyLogEntry,
   GrowthNewsItem,
   DreamStep,
@@ -18,18 +22,21 @@ import type {
   ToastItem,
 } from './types';
 import {
+  advanceStreakCounter,
   applyExpAndLevelUp,
   applyQuestCompletion,
   calculateBiometrics,
   computeDailyDurationBreakdown,
   createInitialPlayerProfile,
   createDefaultDreamSteps,
+  DEFAULT_COIN_ECONOMY,
   getTodayDateKey,
   normalizePlayerProfile,
   playSFX,
   setSfxMuted,
   type CreateProfileInput,
 } from './engine/science';
+import { buildUserTelemetrySummary } from './engine/analytics';
 import {
   loadAIConfig,
   loadLocalLogs,
@@ -46,15 +53,20 @@ import {
 import {
   checkIsUserAdmin,
   deleteProfileFromCloud,
+  fetchCoinTransactions,
   fetchRecentDailyLogs,
   initFirebaseFromConfig,
   initializeCloudProfile,
   isFirebaseReady,
+  recordCoinTransaction,
+  saveCalendarSummaryToCloud,
   saveDailyLogToCloud,
   saveProfileToCloud,
   subscribeAuth,
+  subscribeCoinEconomyConfig,
   subscribeProfileFromCloud,
   subscribeSharedAIPublicConfig,
+  syncUserTelemetrySummary,
   upsertUserMeta,
   watchAdminAccess,
 } from './services/firebaseService';
@@ -152,6 +164,11 @@ export default function App() {
   const isAdmin = Boolean(adminRole);
   const [isUnverifiedBootstrapAdmin, setIsUnverifiedBootstrapAdmin] = useState(false);
   const [sharedAIConfig, setSharedAIConfig] = useState<SharedAIPublicConfig | null>(null);
+  const [coinConfig, setCoinConfig] = useState<CoinEconomyConfig>(() => ({ ...DEFAULT_COIN_ECONOMY }));
+  const [coinTransactions, setCoinTransactions] = useState<CoinTransactionRecord[]>([]);
+  const coinConfigRef = useRef<CoinEconomyConfig>(coinConfig);
+  coinConfigRef.current = coinConfig;
+  const lastTelemetrySig = useRef('');
 
   const [isGeneratingRoadmap, setIsGeneratingRoadmap] = useState(false);
   const breakdownRequest = useRef(0);
@@ -269,11 +286,52 @@ export default function App() {
     });
   }, []);
 
+  const logCoinActivity = useCallback(
+    (
+      type: CoinTransactionType,
+      source: CoinTransactionSource,
+      amount: number,
+      balanceAfter: number,
+      note: string
+    ) => {
+      const cleanAmount = Math.round(amount);
+      if (cleanAmount === 0) return;
+      const user = cloudUserRef.current;
+      const localRecord: CoinTransactionRecord = {
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        ownerUid: user?.uid || 'guest',
+        type,
+        source,
+        amount: cleanAmount,
+        balanceAfter: Math.max(0, Math.round(balanceAfter)),
+        note: note.trim().slice(0, 240),
+        partnerRef: '',
+        actorUid: user?.uid || 'guest',
+        actorEmail: user?.email || '',
+        createdAt: Date.now(),
+      };
+      setCoinTransactions((prev) => [localRecord, ...prev].slice(0, 40));
+      if (user) {
+        void recordCoinTransaction(user.uid, {
+          type,
+          source,
+          amount: cleanAmount,
+          balanceAfter: localRecord.balanceAfter,
+          note: localRecord.note,
+          actorUid: user.uid,
+          actorEmail: user.email || '',
+        }).catch(() => {});
+      }
+    },
+    []
+  );
+
   // Initialize Firebase, Auth Listener, Admin Detection & Shared AI Config
   useEffect(() => {
     let unsubAuth: (() => void) | null = null;
     let unsubProfile: (() => void) | null = null;
     let unsubSharedAI: (() => void) | null = null;
+    let unsubCoinEconomy: (() => void) | null = null;
     let unsubRole: (() => void) | null = null;
     let cancelled = false;
     let activeUid: string | undefined;
@@ -310,6 +368,8 @@ export default function App() {
         playerRef.current = local;
         setPlayer(local);
         setDailyLogs(loadLocalLogs(activeUid));
+        setCoinTransactions([]);
+        lastTelemetrySig.current = '';
         setCloudProfileReady(false);
         setSavingNewProfile(false);
         setModal(null);
@@ -326,11 +386,16 @@ export default function App() {
           unsubSharedAI();
           unsubSharedAI = null;
         }
+        if (unsubCoinEconomy) {
+          unsubCoinEconomy();
+          unsubCoinEconomy = null;
+        }
 
         if (!user) {
           setAdminRole(null);
           setIsUnverifiedBootstrapAdmin(false);
           setSharedAIConfig(null);
+          setCoinConfig({ ...DEFAULT_COIN_ECONOMY });
           setSyncStatus('local');
           return;
         }
@@ -352,10 +417,19 @@ export default function App() {
           });
         });
 
-        // Subscribe to Admin-configured Shared AI public status
+        // Subscribe to Admin-configured Shared AI public status & Coin Economy
         unsubSharedAI = subscribeSharedAIPublicConfig((cfg) => {
           if (!cancelled) setSharedAIConfig(cfg);
         });
+        unsubCoinEconomy = subscribeCoinEconomyConfig((cfg) => {
+          if (!cancelled) setCoinConfig(cfg);
+        });
+
+        void fetchCoinTransactions(user.uid, 30)
+          .then((txs) => {
+            if (!cancelled && activeUid === user.uid) setCoinTransactions(txs);
+          })
+          .catch(() => {});
 
         void fetchRecentDailyLogs(user.uid, 60)
           .then((cloudLogs) => {
@@ -400,6 +474,7 @@ export default function App() {
       if (unsubAuth) unsubAuth();
       if (unsubProfile) unsubProfile();
       if (unsubSharedAI) unsubSharedAI();
+      if (unsubCoinEconomy) unsubCoinEconomy();
       unsubRole?.();
     };
   }, [firebaseVersion]);
@@ -467,7 +542,7 @@ export default function App() {
       );
     } catch {
       if (!silent && breakdownRequest.current === request && playerRef.current?.goal === profile.goal && cloudUserRef.current?.uid === uid) {
-        notify(lang === 'id' ? 'Langkah dari aplikasi siap dipakai. Agnes sedang belum bisa merinci.' : 'Your local steps are ready. Agnes could not add detail right now.', 'info');
+        notify(lang === 'id' ? 'Langkah dari aplikasi siap dipakai. Rancangan detail otomatis sedang belum bisa dijalankan.' : 'Your local steps are ready. Automatic breakdown is currently unavailable.', 'info');
       }
     } finally {
       if (breakdownRequest.current === request) setIsGeneratingRoadmap(false);
@@ -514,7 +589,8 @@ export default function App() {
     }
   };
 
-  const handleCompleteAwakening = (input: CreateProfileInput) => void startProfile(createInitialPlayerProfile(input));
+  const handleCompleteAwakening = (input: CreateProfileInput) =>
+    void startProfile(createInitialPlayerProfile(input, coinConfigRef.current));
 
   // =========================================================================
   // GAMEPLAY & PROGRESS HANDLERS
@@ -522,6 +598,8 @@ export default function App() {
   const handleConfirmCompleteQuest = (quest: Quest, qty: number, rpe: number, workout?: WorkoutFeedback) => {
     if (!player) return;
     const { dateKey } = getJournalMoment();
+    const cfg = coinConfigRef.current;
+    const symbol = cfg.coinSymbol || 'KOIN';
     if (workout?.pain && qty <= 0) {
       journal.save({ id: dateKey + '-task-' + encodeURIComponent(quest.id), dateKey, kind: 'activity',
         title: (quest.title + (lang === 'id' ? ' (dihentikan)' : ' (stopped)')).slice(0, 140), category: 'FITNESS',
@@ -531,8 +609,17 @@ export default function App() {
       return;
     }
     try {
-      const { nextPlayer, result, levelsGained, unlockedSkill, autoCompletedStepTitle } =
-        applyQuestCompletion(player, quest.id, qty, rpe, lang);
+      const {
+        nextPlayer,
+        result,
+        levelsGained,
+        levelUpGold,
+        milestoneGold,
+        unlockedSkill,
+        autoCompletedStepTitle,
+        taskStreakIncremented,
+        workoutStreakIncremented,
+      } = applyQuestCompletion(player, quest.id, qty, rpe, lang, cfg, dateKey);
 
       journal.save({
         id: dateKey + '-task-' + encodeURIComponent(quest.id),
@@ -551,20 +638,47 @@ export default function App() {
       commitPlayerChange({ ...nextPlayer, dreamSteps });
       setModal(null);
 
+      // Record coin audit transactions
+      let runningBalance = player.gold;
+      if (result.goldEarned > 0) {
+        runningBalance += result.goldEarned;
+        logCoinActivity(
+          'earn',
+          quest.category === 'FITNESS' ? 'workout' : 'task',
+          result.goldEarned,
+          runningBalance,
+          quest.title
+        );
+      }
+      if (milestoneGold > 0 && autoCompletedStepTitle) {
+        runningBalance += milestoneGold;
+        logCoinActivity('earn', 'milestone', milestoneGold, runningBalance, autoCompletedStepTitle);
+      }
+      if (levelUpGold > 0) {
+        runningBalance += levelUpGold;
+        logCoinActivity('earn', 'level_up', levelUpGold, runningBalance, `Level Up ke Lv.${nextPlayer.level}`);
+      }
+
+      const streakNote = workoutStreakIncremented
+        ? (lang === 'id' ? ` • 🔥 Streak Workout ${nextPlayer.workoutStreak}h` : ` • 🔥 Workout Streak ${nextPlayer.workoutStreak}d`)
+        : taskStreakIncremented
+          ? (lang === 'id' ? ` • 🔥 Streak Tugas ${nextPlayer.taskStreak}h` : ` • 🔥 Task Streak ${nextPlayer.taskStreak}d`)
+          : '';
+
       if (levelsGained > 0) {
         playSFX('levelup');
         notify(
           lang === 'id'
-            ? `LEVEL UP! Kamu naik ke Level ${nextPlayer.level}! (+${levelsGained * 50} Koin Bonus)`
-            : `LEVEL UP! You reached Level ${nextPlayer.level}! (+${levelsGained * 50} Bonus Coins)`,
+            ? `LEVEL UP! Kamu naik ke Level ${nextPlayer.level}!${levelUpGold > 0 ? ` (+${levelUpGold} ${symbol})` : ''}${streakNote}`
+            : `LEVEL UP! You reached Level ${nextPlayer.level}!${levelUpGold > 0 ? ` (+${levelUpGold} ${symbol})` : ''}${streakNote}`,
           'success'
         );
       } else {
         playSFX('quest');
         notify(
           lang === 'id'
-            ? `Tugas selesai! +${result.expEarned} EXP • +${result.goldEarned} CR (+${result.loggedMinutes}m)`
-            : `Task complete! +${result.expEarned} EXP • +${result.goldEarned} CR (+${result.loggedMinutes}m)`,
+            ? `${quest.category === 'FITNESS' ? 'Workout' : 'Tugas'} selesai! +${result.goldEarned} ${symbol} (+${result.loggedMinutes}m)${streakNote}`
+            : `${quest.category === 'FITNESS' ? 'Workout' : 'Task'} complete! +${result.goldEarned} ${symbol} (+${result.loggedMinutes}m)${streakNote}`,
           'success'
         );
       }
@@ -581,8 +695,8 @@ export default function App() {
       if (autoCompletedStepTitle) {
         notify(
           lang === 'id'
-            ? `Tahap Peta Impian tercapai: "${autoCompletedStepTitle}" (+60 EXP, +50 CR)!`
-            : `Dream Milestone achieved: "${autoCompletedStepTitle}" (+60 EXP, +50 CR)!`,
+            ? `Tahap Peta Impian tercapai: "${autoCompletedStepTitle}"${milestoneGold > 0 ? ` (+${milestoneGold} ${symbol})` : ''}!`
+            : `Dream Milestone achieved: "${autoCompletedStepTitle}"${milestoneGold > 0 ? ` (+${milestoneGold} ${symbol})` : ''}!`,
           'success'
         );
       }
@@ -603,36 +717,48 @@ export default function App() {
       return;
     }
 
+    const cfg = coinConfigRef.current;
+    const symbol = cfg.coinSymbol || 'KOIN';
+    const overdriveGold = Math.max(0, Math.round(cfg.pointPerOverdrive));
     const base: PlayerProfile = {
       ...player,
       coreCharge: 0,
-      gold: player.gold + 60,
+      gold: player.gold + overdriveGold,
     };
-    const { nextPlayer, levelsGained } = applyExpAndLevelUp(base, 60);
+    const { nextPlayer, levelsGained, levelUpGold } = applyExpAndLevelUp(base, 20, cfg);
     commitPlayerChange(nextPlayer);
+    if (overdriveGold > 0) {
+      logCoinActivity('earn', 'overdrive', overdriveGold, player.gold + overdriveGold, 'Ekstrak Energi Core (4/4)');
+    }
+    if (levelUpGold > 0) {
+      logCoinActivity('earn', 'level_up', levelUpGold, nextPlayer.gold, `Level Up ke Lv.${nextPlayer.level}`);
+    }
     playSFX('levelup');
     notify(
       levelsGained > 0
         ? lang === 'id'
-          ? `OVERDRIVE + LEVEL UP ke Lv.${nextPlayer.level}!`
-          : `OVERDRIVE + LEVEL UP to Lv.${nextPlayer.level}!`
+          ? `OVERDRIVE + LEVEL UP ke Lv.${nextPlayer.level}! (+${overdriveGold + levelUpGold} ${symbol})`
+          : `OVERDRIVE + LEVEL UP to Lv.${nextPlayer.level}! (+${overdriveGold + levelUpGold} ${symbol})`
         : lang === 'id'
-          ? 'OVERDRIVE DIEKSTRAK! +60 EXP & +60 Koin Bonus!'
-          : 'OVERDRIVE EXTRACTED! +60 EXP & +60 Bonus Coins!',
+          ? `ENERGI CORE DIEKSTRAK! +${overdriveGold} ${symbol}`
+          : `CORE ENERGY EXTRACTED! +${overdriveGold} ${symbol}`,
       'success'
     );
   };
 
   const handleToggleDreamStep = (stepId: string) => {
     if (!player) return;
-    let newlyCompleted = false;
+    const cfg = coinConfigRef.current;
+    const symbol = cfg.coinSymbol || 'KOIN';
+    let newlyRewardedTitle = '';
     const nextSteps = player.dreamSteps.map((step) => {
       if (step.id !== stepId || step.archived) return step;
       const nextDone = !step.completed;
-      if (nextDone) newlyCompleted = true;
+      if (nextDone && !step.rewarded) newlyRewardedTitle = step.title;
       return {
         ...step,
         completed: nextDone,
+        rewarded: nextDone ? true : step.rewarded,
         completedMinutes: nextDone
           ? Math.max(step.completedMinutes, step.targetMinutes)
           : step.completedMinutes,
@@ -655,15 +781,23 @@ export default function App() {
       boss: { ...player.boss, hp },
     };
 
-    if (newlyCompleted) {
-      updated = { ...updated, gold: updated.gold + 50 };
-      const expRes = applyExpAndLevelUp(updated, 60);
+    if (newlyRewardedTitle) {
+      const milestoneGold = Math.max(0, Math.round(cfg.pointPerMilestone));
+      const afterMilestoneGold = updated.gold + milestoneGold;
+      updated = { ...updated, gold: afterMilestoneGold };
+      const expRes = applyExpAndLevelUp(updated, 25, cfg);
       updated = expRes.nextPlayer;
+      if (milestoneGold > 0) {
+        logCoinActivity('earn', 'milestone', milestoneGold, afterMilestoneGold, newlyRewardedTitle);
+      }
+      if (expRes.levelUpGold > 0) {
+        logCoinActivity('earn', 'level_up', expRes.levelUpGold, updated.gold, `Level Up ke Lv.${updated.level}`);
+      }
       playSFX(expRes.levelsGained > 0 ? 'levelup' : 'quest');
       notify(
         lang === 'id'
-          ? 'Tahap Peta Impian tercapai! +60 EXP & +50 CR!'
-          : 'Dream Roadmap step complete! +60 EXP & +50 CR!',
+          ? `Tahap Peta Impian tercapai!${milestoneGold > 0 ? ` +${milestoneGold} ${symbol}` : ''}`
+          : `Dream Roadmap step complete!${milestoneGold > 0 ? ` +${milestoneGold} ${symbol}` : ''}`,
         'success'
       );
     } else {
@@ -675,14 +809,26 @@ export default function App() {
 
   const handleConfirmCompleteDay = () => {
     if (!player) return;
+    const cfg = coinConfigRef.current;
+    const symbol = cfg.coinSymbol || 'KOIN';
+    const todayKey = getTodayDateKey();
     const completedCount = player.quests.filter((q) => q.completed).length;
-    const qualifiesBonus = completedCount >= 2;
-    const nextStreak = qualifiesBonus ? player.streak + 1 : player.streak;
-    const bonusExp = qualifiesBonus ? 40 : 0;
-    const bonusGold = qualifiesBonus ? 40 : 0;
+    const qualifiesBonus = completedCount >= 1;
+    const alreadyClaimedToday = dailyLogs.some((l) => l.dateKey === todayKey && l.goldEarned > 0);
+    const streakRes = qualifiesBonus
+      ? advanceStreakCounter(player.streak, player.longestStreak, player.lastActiveStreakDate, todayKey)
+      : {
+          count: player.streak,
+          longest: player.longestStreak ?? player.streak,
+          lastDate: player.lastActiveStreakDate || '',
+          incremented: false,
+        };
+    const nextStreak = streakRes.count;
+    const bonusExp = qualifiesBonus && !alreadyClaimedToday ? 15 : 0;
+    const bonusGold = qualifiesBonus && !alreadyClaimedToday ? Math.max(0, Math.round(cfg.pointPerDayClear)) : 0;
 
     const logEntry: DailyLogEntry = {
-      dateKey: getTodayDateKey(),
+      dateKey: todayKey,
       completedTasks: completedCount,
       totalTasks: player.quests.length,
       studyMinutes: player.dailyDurationLog.study,
@@ -718,20 +864,28 @@ export default function App() {
     const base: PlayerProfile = {
       ...player,
       streak: nextStreak,
+      longestStreak: streakRes.longest,
+      lastActiveStreakDate: streakRes.lastDate,
       gold: player.gold + bonusGold,
       dailyDurationLog: { study: 0, work: 0, fitness: 0 },
       quests: refreshedQuests,
     };
 
-    const { nextPlayer } = applyExpAndLevelUp(base, bonusExp);
+    const { nextPlayer, levelUpGold } = applyExpAndLevelUp(base, bonusExp, cfg);
     commitPlayerChange(nextPlayer);
+    if (bonusGold > 0) {
+      logCoinActivity('earn', 'day_clear', bonusGold, player.gold + bonusGold, `Rekap harian ${todayKey}`);
+    }
+    if (levelUpGold > 0) {
+      logCoinActivity('earn', 'level_up', levelUpGold, nextPlayer.gold, `Level Up ke Lv.${nextPlayer.level}`);
+    }
     setModal(null);
     playSFX('levelup');
     notify(
-      qualifiesBonus
+      bonusGold > 0
         ? lang === 'id'
-          ? `Hari ditutup! Streak ${nextStreak} hari (+40 EXP, +40 CR). Tugas siap untuk besok!`
-          : `Day complete! ${nextStreak}-day streak (+40 EXP, +40 CR). Fresh tasks ready!`
+          ? `Hari ditutup! 🔥 Streak ${nextStreak} hari (+${bonusGold} ${symbol}). Tugas siap untuk besok!`
+          : `Day complete! 🔥 ${nextStreak}-day streak (+${bonusGold} ${symbol}). Fresh tasks ready!`
         : lang === 'id'
           ? 'Log harian disimpan dan tugas disegarkan untuk sesi baru!'
           : 'Daily log saved and tasks refreshed for a fresh start!',
@@ -741,23 +895,26 @@ export default function App() {
 
   const handleBuyReward = (rewardId: string) => {
     if (!player) return;
+    const symbol = coinConfigRef.current.coinSymbol || 'KOIN';
     const rew = player.rewards.find((r) => r.id === rewardId);
     if (!rew) return;
     if (player.gold < rew.cost) {
       notify(
         lang === 'id'
-          ? `Koin belum cukup! Butuh ${rew.cost} CR.`
-          : `Not enough coins! Need ${rew.cost} CR.`,
+          ? `Koin belum cukup! Butuh ${rew.cost} ${symbol}.`
+          : `Not enough coins! Need ${rew.cost} ${symbol}.`,
         'warning'
       );
       return;
     }
-    commitPlayerChange({ ...player, gold: player.gold - rew.cost });
+    const nextBalance = player.gold - rew.cost;
+    commitPlayerChange({ ...player, gold: nextBalance });
+    logCoinActivity('redeem', 'self_reward', -rew.cost, nextBalance, `Tukar hadiah: ${rew.name}`);
     playSFX('levelup');
     notify(
       lang === 'id'
-        ? `Berhasil menukar "${rew.name}"! Selamat menikmati hadiah kerjamu!`
-        : `Redeemed "${rew.name}"! Enjoy your well-earned reward!`,
+        ? `Berhasil menukar "${rew.name}" (-${rew.cost} ${symbol})! Selamat menikmati hadiah kerjamu!`
+        : `Redeemed "${rew.name}" (-${rew.cost} ${symbol})! Enjoy your well-earned reward!`,
       'success'
     );
   };
@@ -776,8 +933,8 @@ export default function App() {
       defaultQty: 20,
       skillTag: activeStep?.skillName || item.tag,
       dreamStepId: activeStep?.id ?? null,
-      exp: 45,
-      gold: 40,
+      exp: 20,
+      gold: 1,
       completed: false,
     };
     commitPlayerChange({
@@ -941,11 +1098,29 @@ export default function App() {
     }
   }, [isPlayerReady, hasCheckIn, modal, journal.key, currentCheckInId, dateKey, phase, missingGym]);
 
+  // Keep Admin directory telemetry synced whenever participant profile/journal/logs update
+  useEffect(() => {
+    if (!cloudUser || !player || isAdminView || !cloudProfileReady) return;
+    const summary = buildUserTelemetrySummary(player, journal.records, dailyLogs, dateKey);
+    const sig = JSON.stringify({ ...summary, updatedAt: 0 });
+    if (sig === lastTelemetrySig.current) return;
+    const timer = window.setTimeout(() => {
+      lastTelemetrySig.current = sig;
+      void syncUserTelemetrySummary(cloudUser.uid, summary).catch(() => {});
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [cloudUser, player, journal.records, dailyLogs, dateKey, isAdminView, cloudProfileReady]);
+
   const evidence = getDailyEvidence(journal.records, dailyLogs, dateKey, player?.age ?? 18);
   const calendarEvents = agenda?.owner === journal.key ? agenda.events : [];
   const focus = player ? planDailyFocus(player, evidence, calendarEvents, phase, now, lang) : null;
   const reflection = player ? createDailyReflection({ owner: journal.key, player, evidence, events: calendarEvents, dateKey, phase, now, lang }) : null;
   const updateAgenda = useCallback((owner: string, events: CalendarEvent[]) => setAgenda({ owner, events }), []);
+  const handleCalendarSynced = useCallback((source: 'google_oauth' | 'ics' | 'none', events: CalendarEvent[]) => {
+    const uid = cloudUserRef.current?.uid;
+    if (!uid) return;
+    void saveCalendarSummaryToCloud(uid, source, events).catch(() => {});
+  }, []);
   const addCoachQuest = (quest: Quest) => {
     const current = playerRef.current;
     if (!current || current.quests.length >= 100 || current.quests.some((item) => item.title === quest.title && item.category === quest.category && item.dreamStepId === quest.dreamStepId)) return;
@@ -959,23 +1134,41 @@ export default function App() {
       id: crypto.randomUUID(), title: clean, category: 'CAREER', unitType: 'MINUTES',
       defaultQty: 15, skillTag: step?.skillName || (lang === 'id' ? 'Manajemen proyek' : 'Project management'),
       dreamStepId: step?.id ?? null,
-      exp: 30, gold: 20, completed: false,
+      exp: 20, gold: 1, completed: false,
     });
   };
 
   const addSuggestedTask = (task: DailyTaskSuggestion) => addCoachQuest({
     id: 'daily-plan-' + crypto.randomUUID(), title: task.title, category: task.category, unitType: 'MINUTES',
-    defaultQty: task.minutes, skillTag: task.skill, dreamStepId: task.stepId ?? null, exp: 30, gold: 20, completed: false,
+    defaultQty: task.minutes, skillTag: task.skill, dreamStepId: task.stepId ?? null, exp: 20, gold: 1, completed: false,
   });
 
   const openCheckIn = () => setModal({ type: 'checkIn', ...getJournalMoment(), owner: journal.key });
   const saveCheckIn = (input: CheckInInput) => {
     if (modal?.type !== 'checkIn' || modal.owner !== journal.key) return;
-    const entry: CheckIn = { ...input, id: modal.dateKey + '-' + modal.phase,
+    const entryId = modal.dateKey + '-' + modal.phase;
+    const isNewSlot = !journal.records.some((record) => record.id === entryId);
+    const entry: CheckIn = { ...input, id: entryId,
       dateKey: modal.dateKey, phase: modal.phase, kind: 'checkin', updatedAt: Date.now() };
     journal.save(entry);
     setModal(null);
-    notify(lang === 'id' ? 'Check-in tersimpan.' : 'Check-in saved.', 'success');
+
+    const cfg = coinConfigRef.current;
+    const checkInReward = isNewSlot ? Math.max(0, Math.round(cfg.pointPerCheckIn)) : 0;
+    const current = playerRef.current;
+    if (checkInReward > 0 && current) {
+      const nextBalance = current.gold + checkInReward;
+      commitPlayerChange({ ...current, gold: nextBalance });
+      logCoinActivity('earn', 'checkin', checkInReward, nextBalance, `Check-in ${modal.phase} (${modal.dateKey})`);
+      notify(
+        lang === 'id'
+          ? `Check-in tersimpan! +${checkInReward} ${cfg.coinSymbol}`
+          : `Check-in saved! +${checkInReward} ${cfg.coinSymbol}`,
+        'success'
+      );
+    } else {
+      notify(lang === 'id' ? 'Check-in tersimpan.' : 'Check-in saved.', 'success');
+    }
   };
 
   const avatarOwner = avatarOwnerKey(cloudUser?.uid);
@@ -1105,7 +1298,7 @@ export default function App() {
               } grid-cols-1 lg:grid-cols-12 gap-5`}
             >
               <div className="lg:col-span-4">
-                <StatusPanel player={player} lang={lang} />
+                <StatusPanel player={player} lang={lang} coinConfig={coinConfig} />
               </div>
               <div className="lg:col-span-4">
                 <NutritionPanel lang={lang} evidence={evidence} onOpen={openCheckIn} />
@@ -1153,6 +1346,7 @@ export default function App() {
                   player={player}
                   lang={lang}
                   filter={questFilter}
+                  coinConfig={coinConfig}
                   focus={focus}
                   onAddSuggestion={addSuggestedTask}
                   onChangeFilter={(f) => {
@@ -1187,14 +1381,18 @@ export default function App() {
 
             <div className={`grid gap-4 lg:grid-cols-2 ${mobileTab !== 'tasks' ? 'hidden lg:grid' : ''}`}>
               <CareerCoach key={journal.key} owner={journal.key} player={player} lang={lang} records={journal.records}
-                onEdit={() => setModal({ type: 'coachSetup', section: 'career' })} onAdd={addMicroTask} onAgenda={updateAgenda} />
-              <GymCoach player={player} lang={lang} evidence={evidence} records={journal.records}
-                onEdit={() => setModal({ type: 'coachSetup', section: 'gym' })} onAdd={addCoachQuest} />
+                onEdit={() => setModal({ type: 'coachSetup', section: 'career' })} onAdd={addMicroTask} onAgenda={updateAgenda}
+                onCalendarSynced={handleCalendarSynced} />
+              <GymCoach player={player} lang={lang} evidence={evidence} records={journal.records} coinConfig={coinConfig}
+                onEdit={() => setModal({ type: 'coachSetup', section: 'gym' })} onAdd={addCoachQuest}
+                onCompleteQuest={(q) => setModal({ type: 'completeQuest', quest: q })} />
             </div>
 
             {/* ROW 3: REWARD EXCHANGE + GROWTH NEWS */}
             <div className={mobileTab === 'perks' ? 'block' : 'hidden lg:block'}>
               <RewardsAndGrowth player={player} lang={lang}
+                coinConfig={coinConfig}
+                recentTransactions={coinTransactions}
                 actions={getGrowthActions(player, dailyLogs, journal.records, evidence, lang)}
                 onBuyReward={handleBuyReward}
                 onAddReward={() => setModal({ type: 'addReward' })}
@@ -1382,6 +1580,7 @@ export default function App() {
           player={player}
           quest={modal.quest}
           lang={lang}
+          coinConfig={coinConfig}
           onConfirm={(qty, rpe, workout) => handleConfirmCompleteQuest(modal.quest, qty, rpe, workout)}
           onClose={() => setModal(null)}
         />
@@ -1409,6 +1608,7 @@ export default function App() {
       {modal?.type === 'addReward' && player && (
         <AddRewardModal
           lang={lang}
+          coinSymbol={coinConfig.coinSymbol}
           onAdd={(name, cost, desc) => {
             commitPlayerChange({
               ...player,
@@ -1439,6 +1639,7 @@ export default function App() {
           player={player}
           recentLogs={dailyLogs}
           lang={lang}
+          coinConfig={coinConfig}
           onConfirmCompleteDay={handleConfirmCompleteDay}
           onClose={() => setModal(null)}
         />

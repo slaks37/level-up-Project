@@ -6,16 +6,23 @@ rules_version = '2';
 //
 // Security Architecture:
 //   - Default-deny at root (`/{document=**}`).
-//   - Admin authority is derived ONLY from trusted sources:
+//   - Admin / staff authority is derived ONLY from trusted sources:
 //       1) Bootstrap Admin verified JWT email (`stefenlaksana.sl@gmail.com`)
-//       2) Server/Admin-managed existence check in `admins/{uid}`
-//     Admin authority NEVER trusts client-writable fields such as `users/{uid}.role`.
-//   - Private player health, profile, and daily log data remain strictly
-//     owner-only (`request.auth.uid == userId`), inaccessible even to admins.
+//       2) Verified email membership in `adminEmails/{email}` (roles: admin, operator, auditor)
+//       3) Legacy verified-email grant in `admins/{uid}` (role: admin)
+//     Authority NEVER trusts client-writable fields such as `users/{uid}.role`.
 //   - Shared AI provider secrets (`adminSecrets/aiProvider`) are strictly
-//     admin-only and NEVER readable by regular users.
-//   - Non-secret AI status (`appConfig/aiPublic`) is readable by authenticated
-//     users and strictly forbids any API key or secret fields.
+//     admin or AI proxy readable and admin-only writable.
+//   - Partner coin secrets (`adminSecrets/coinPartner`) are strictly admin-only
+//     (NOT readable by AI proxy, operators, auditors, or regular users).
+//   - Non-secret app configuration (`appConfig/aiPublic`, `appConfig/coinEconomy`)
+//     is readable by authenticated users, writable only by admins, and strictly
+//     forbids API keys or secret fields.
+//   - Participant subcollections (`profile/main`, `journal`, `dailyLogs`,
+//     `coinTransactions`, `calendar/latest`) are readable by the owner or
+//     verified staff (`isStaff()`) for monitoring & habit analytics, while
+//     writes remain strictly owner-only (except admin coin/reward adjustments
+//     on `profile/main` and admin ledger entries on `coinTransactions`).
 //
 // 1. Collection: admins/{uid}
 //    Document ID: {uid} (Firebase Auth UID of granted admin)
@@ -26,10 +33,21 @@ rules_version = '2';
 //      - grantedBy: string (1..128 chars)
 //      - createdAt: timestamp
 //
-// 2. Collection: appConfig/{docId}
-//    Document ID: strictly 'aiPublic' (no API keys or secrets permitted)
+// 2. Collection: adminEmails/{email}
+//    Document ID: {email} (lowercased staff email)
+//    Access: admin or matching verified-email user `get`, admin `list`/`create`/`update`/`delete` (no self-edit/delete).
+//    Fields:
+//      - email: string (1..254 chars; lowercased; == {email})
+//      - role: string in ['admin', 'operator', 'auditor']
+//      - grantedBy: string (== request.auth.uid on create)
+//      - createdAt: timestamp (== request.time on create)
+//      - updatedBy: string (optional; == request.auth.uid on update)
+//      - updatedAt: timestamp (optional; == request.time on update)
+//
+// 3. Collection: appConfig/{docId}
+//    Document ID: strictly 'aiPublic' or 'coinEconomy' (no API keys or secrets permitted)
 //    Access: authenticated `get`, admin `list`/`create`/`update`, no `delete`.
-//    Fields (all 8 required; strict hasOnly):
+//    Document 'aiPublic' fields (all 8 required; strict hasOnly):
 //      - enabled: bool
 //      - providerName: string (1..60 chars)
 //      - model: string (1..80 chars)
@@ -38,11 +56,32 @@ rules_version = '2';
 //      - maintenanceNotice: string (0..300 chars)
 //      - updatedAt: timestamp
 //      - updatedBy: string (1..128 chars)
+//    Document 'coinEconomy' fields (all 18 required; strict hasOnly):
+//      - coinName: string (1..60 chars)
+//      - coinSymbol: string (1..16 chars)
+//      - pointPerTask: int (0..1000)
+//      - pointPerWorkout: int (0..1000)
+//      - pointPerCheckIn: int (0..1000)
+//      - pointPerMilestone: int (0..1000)
+//      - pointPerOverdrive: int (0..1000)
+//      - pointPerDayClear: int (0..1000)
+//      - pointPerLevelUp: int (0..1000)
+//      - startingCoins: int (0..10000)
+//      - idrPerCoin: number (0..1000000)
+//      - partnerName: string (0..80 chars)
+//      - partnerEnabled: bool
+//      - partnerEndpoint: string (0..300 chars; empty or ^https?://.+$)
+//      - minRedeemCoins: int (1..100000)
+//      - transactionNote: string (0..300 chars)
+//      - updatedAt: timestamp
+//      - updatedBy: string (1..128 chars)
 //
-// 3. Collection: adminSecrets/{docId}
-//    Document ID: strictly 'aiProvider' (admin-only API key vault)
-//    Access: admin `get`/`create`/`update`, no `list` or `delete`.
-//    Fields (all 7 required; strict hasOnly):
+// 4. Collection: adminSecrets/{docId}
+//    Document ID: strictly 'aiProvider' or 'coinPartner' (secret vault)
+//    Access:
+//      - 'aiProvider': admin or AI proxy `get`; admin `create`/`update`; no `list`/`delete`.
+//      - 'coinPartner': admin ONLY `get`/`create`/`update`; no `list`/`delete`.
+//    Document 'aiProvider' fields (all 7 required; strict hasOnly):
 //      - baseUrl: string (1..300 chars; matches ^https?://.+$)
 //      - model: string (1..80 chars)
 //      - apiKey: string (0..500 chars)
@@ -50,70 +89,76 @@ rules_version = '2';
 //      - dailyLimit: int (0..500)
 //      - updatedAt: timestamp
 //      - updatedBy: string (1..128 chars)
+//    Document 'coinPartner' fields (all 7 required; strict hasOnly):
+//      - partnerName: string (0..80 chars)
+//      - merchantId: string (0..120 chars)
+//      - apiEndpoint: string (0..300 chars; empty or ^https?://.+$)
+//      - apiKey: string (0..500 chars)
+//      - webhookSecret: string (0..500 chars)
+//      - updatedAt: timestamp
+//      - updatedBy: string (1..128 chars)
 //
-// 4. Collection: users/{userId} (User Account Directory)
+// 5. Collection: users/{userId} (User Account Directory)
 //    Document ID: {userId} (Firebase Auth UID)
-//    Access: owner or admin `get`/`delete`, admin `list`, owner `create`
-//            (regular users forced to default role/status/quota), owner or
-//            admin `update` (regular users cannot alter role/status/quota).
-//    Fields (all 11 required; strict hasOnly):
+//    Access: owner, staff, or AI proxy `get`; staff `list`; owner `create`
+//            (non-admins forced to default role/status/quota); owner, admin,
+//            operator (status/quota reset on non-staff only), or AI proxy (quota only)
+//            `update`; admin `delete`.
+//    Fields (11 required + 1 optional; strict hasOnly):
 //      - ownerUid: string (1..128 chars; == userId; immutable on update)
 //      - displayName: string (1..120 chars)
 //      - email: string (0..254 chars; empty or valid email format)
 //      - language: string in ['id', 'en']
-//      - role: string in ['user', 'admin'] (locked for non-admins)
+//      - role: string in ['user', 'admin', 'operator', 'auditor'] (locked for non-admins)
 //      - status: string in ['active', 'suspended'] (locked for non-admins)
 //      - aiRequestsToday: int (0..10000; locked for non-admins)
 //      - aiTotalRequests: int (0..1000000; locked for non-admins)
 //      - aiQuotaDate: string (0..10 chars; empty or YYYY-MM-DD; locked for non-admins)
 //      - createdAt: timestamp (immutable on update)
 //      - updatedAt: timestamp
+//      - telemetry: map (optional; strict 17-field summary synced by owner or admin coin adjustment):
+//          name (string 0..100), profession (string 0..160), goal (string 0..300),
+//          level (int 1..999), gold (int 0..10000000), streak (int 0..100000),
+//          taskStreak (int 0..100000), workoutStreak (int 0..100000),
+//          completedTasksTotal (int 0..1000000), completedWorkoutsTotal (int 0..1000000),
+//          lastMood (string 0..30), lastEnergy (string 0..30),
+//          lastSleepHours (null or number 0..24), hasPainAlert (bool),
+//          projectBlocked (bool), lastActiveDate (string 0..10), updatedAt (int >= 0)
 //
-// 5. Collection: users/{userId}/profile/{docId}
+// 6. Collection: users/{userId}/profile/{docId}
 //    Document ID: strictly 'main'
-//    Access: strictly owner-only CRUD (`isOwner(userId)`).
-//    Fields (all 37 required; strict hasOnly; NO API keys permitted):
+//    Access: owner or staff `get`; owner `create`/`update`/`delete`;
+//            admin `update` limited strictly to ['gold', 'rewards', 'updatedAt'].
+//    Fields (37 required + 10 optional; strict hasOnly; NO API keys permitted):
 //      - ownerUid: string == userId (immutable on update)
-//      - schemaVersion: int (1..20)
+//      - schemaVersion: int
 //      - updatedAt: timestamp
-//      - name: string (1..100 chars)
-//      - gender: string in ['male', 'female']
-//      - age: number (10..120)
-//      - height: number (100..250)
-//      - weight: number (25..300)
-//      - city: string (0..100 chars)
-//      - rewardInterest: string (0..300 chars)
-//      - bio: map { bmi: number, bmiCategory: string(0..60), bmr: number, proteinTarget: number }
-//      - profession: string (1..160 chars)
-//      - classTitle: string (1..120 chars)
-//      - goal: string (1..300 chars)
-//      - targetLevel: int (1..999)
-//      - dailyBreakdown: map { total, study, work, fitness: number >= 0 }
-//      - dailyDurationLog: map { study, work, fitness: number >= 0 }
-//      - coachAdvice: string (0..1000 chars)
-//      - level: int (1..999)
-//      - exp: int (0..10000000)
-//      - maxExp: int (1..10000000)
-//      - gold: int (0..10000000)
-//      - streak: int (0..100000)
-//      - coreCharge: int (0..4)
-//      - sleepCondition: string in ['poor', 'moderate', 'optimal']
-//      - nutritionCondition: string in ['deficit', 'balanced', 'high_protein']
-//      - stats: map { str, vit, int, agi, cha: number >= 0 }
-//      - stages: list (size <= 20)
-//      - quests: list (size <= 100)
-//      - shadows: list (size <= 200)
-//      - skillProgress: map (size <= 200; no secret/API-key field names)
-//      - dreamSteps: list (size <= 50)
-//      - rewards: list (size <= 50)
-//      - discoveredPerks: list (size <= 30)
-//      - growthNews: list (size <= 30)
-//      - groundingSources: list (size <= 30)
-//      - boss: map { name: string(0..300), desc: string(0..500), hp: number, maxHp: number }
+//      - name (string <= 100), gender in ['male', 'female'], age, height, weight (number),
+//        city (string <= 100), rewardInterest (string <= 300), bio (map),
+//        profession (string <= 160), classTitle (string <= 120), goal (string <= 300),
+//        targetLevel (int), dailyBreakdown (map), dailyDurationLog (map),
+//        coachAdvice (string <= 1000), level, exp, maxExp, gold, streak, coreCharge (int),
+//        sleepCondition in ['poor', 'moderate', 'optimal'],
+//        nutritionCondition in ['deficit', 'balanced', 'high_protein'],
+//        stats (map), stages (list <= 20), quests (list <= 100), shadows (list <= 200),
+//        skillProgress (map <= 200; no secret/API-key field names),
+//        dreamSteps (list <= 50), rewards (list <= 50), discoveredPerks (list <= 30),
+//        growthNews (list <= 30), groundingSources (list <= 30), boss (map)
+//      - Optional fields:
+//          career (map), gym (map),
+//          taskStreak (int 0..100000), workoutStreak (int 0..100000),
+//          longestStreak (int 0..100000), longestTaskStreak (int 0..100000),
+//          longestWorkoutStreak (int 0..100000),
+//          lastActiveStreakDate (string 0..10), lastTaskStreakDate (string 0..10),
+//          lastWorkoutStreakDate (string 0..10)
 //
-// 6. Collection: users/{userId}/dailyLogs/{dateKey}
+// 7. Collection: users/{userId}/journal/{entryId}
+//    Document ID: `{dateKey}-{phase}` (checkin) or `{dateKey}-task-{id}` (activity)
+//    Access: owner or staff `get`/`list`; owner-only `create`/`update`/`delete`.
+//
+// 8. Collection: users/{userId}/dailyLogs/{dateKey}
 //    Document ID: {dateKey} matching YYYY-MM-DD (format & month/day range check)
-//    Access: strictly owner-only CRUD (`isOwner(userId)`).
+//    Access: owner or staff `get`/`list`; owner-only `create`/`update`/`delete`.
 //    Fields (all 13 required; strict hasOnly):
 //      - ownerUid: string == userId (immutable on update)
 //      - dateKey: string == {dateKey} doc ID (immutable on update)
@@ -129,10 +174,37 @@ rules_version = '2';
 //      - nutritionCondition: string in ['deficit', 'balanced', 'high_protein']
 //      - createdAt: timestamp (preserved or server request.time on same-day upsert)
 //
-// 7. Collection: aiUsageLogs/{logId}
-//    Document ID: auto-generated server log ID
-//    Access: admin-only `get`/`list`; all client writes denied (written
-//            exclusively via server Firebase Admin SDK).
+// 9. Collection: users/{userId}/coinTransactions/{txId}
+//    Document ID: generated transaction ID
+//    Access: owner or staff `get`/`list`; owner `create` (earn/redeem with player sources only);
+//            admin `create` (admin_adjust/partner_tx/earn/redeem with all sources);
+//            no `update` or `delete` (immutable ledger).
+//    Fields (all 10 required; strict hasOnly):
+//      - ownerUid: string == userId
+//      - type: string in ['earn', 'redeem', 'admin_adjust', 'partner_tx']
+//      - source: string in ['task', 'workout', 'checkin', 'milestone', 'overdrive',
+//                           'day_clear', 'level_up', 'self_reward', 'admin', 'partner']
+//      - amount: int (-1000000..1000000, != 0)
+//      - balanceAfter: int (0..10000000)
+//      - note: string (0..240 chars)
+//      - partnerRef: string (0..120 chars)
+//      - actorUid: string (1..128 chars; == request.auth.uid)
+//      - actorEmail: string (0..254 chars)
+//      - createdAt: int (>= 0)
+//
+// 10. Collection: users/{userId}/calendar/{docId}
+//     Document ID: strictly 'latest' on writes/deletes
+//     Access: owner or staff `get`/`list`; owner-only `create`/`update`/`delete` on 'latest'.
+//     Fields (all 5 required; strict hasOnly):
+//       - ownerUid: string == userId (immutable on update)
+//       - source: string in ['google_oauth', 'ics', 'none']
+//       - syncedAt: int (>= 0)
+//       - eventCount: int (0..50; == events.size())
+//       - events: list (size <= 50)
+//
+// 11. Collection: aiUsageLogs/{logId}
+//     Document ID: auto-generated server log ID
+//     Access: admin/auditor `get`/`list`; AI proxy `create`; no `update`/`delete`.
 //
 // Note: Because users/{userId} may be synced independently in offline-first
 // mode, subcollections do not require the parent users/{userId} document to
@@ -254,6 +326,10 @@ service cloud.firestore {
         url.matches('^https?://.+$');
     }
 
+    function isValidOptionalHttpUrl(url, maxLen) {
+      return url is string && (url.size() == 0 || isValidHttpUrl(url, maxLen));
+    }
+
     // Format + month/day range validation (does not enforce calendar month lengths).
     function isValidDateKey(dateKey) {
       return dateKey is string &&
@@ -269,7 +345,7 @@ service cloud.firestore {
     }
 
     // ===============================================================
-    // Nested Map Validators (Profile)
+    // Nested Map Validators (Profile & User Telemetry)
     // ===============================================================
 
     // Bracket indexing used on 'int' because 'int' is a reserved keyword in CEL.
@@ -281,6 +357,36 @@ service cloud.firestore {
           'apiKey', 'geminiApiKey', 'openaiApiKey',
           'secretKey', 'privateKey', 'accessToken'
         ]);
+    }
+
+    function isValidUserTelemetry(t) {
+      let telemetryFields = [
+        'name', 'profession', 'goal', 'level', 'gold',
+        'streak', 'taskStreak', 'workoutStreak',
+        'completedTasksTotal', 'completedWorkoutsTotal',
+        'lastMood', 'lastEnergy', 'lastSleepHours',
+        'hasPainAlert', 'projectBlocked', 'lastActiveDate', 'updatedAt'
+      ];
+      return t is map &&
+        t.keys().hasOnly(telemetryFields) &&
+        t.keys().hasAll(telemetryFields) &&
+        isValidString(t.name, 0, 100) &&
+        isValidString(t.profession, 0, 160) &&
+        isValidString(t.goal, 0, 300) &&
+        isIntInRange(t.level, 1, 999) &&
+        isIntInRange(t.gold, 0, 10000000) &&
+        isIntInRange(t.streak, 0, 100000) &&
+        isIntInRange(t.taskStreak, 0, 100000) &&
+        isIntInRange(t.workoutStreak, 0, 100000) &&
+        isIntInRange(t.completedTasksTotal, 0, 1000000) &&
+        isIntInRange(t.completedWorkoutsTotal, 0, 1000000) &&
+        isValidString(t.lastMood, 0, 30) &&
+        isValidString(t.lastEnergy, 0, 30) &&
+        (t.lastSleepHours == null || isNumberInRange(t.lastSleepHours, 0, 24)) &&
+        t.hasPainAlert is bool &&
+        t.projectBlocked is bool &&
+        isValidString(t.lastActiveDate, 0, 10) &&
+        t.updatedAt is int && t.updatedAt >= 0;
     }
 
     // ===============================================================
@@ -315,6 +421,38 @@ service cloud.firestore {
         isValidString(data.updatedBy, 1, 128);
     }
 
+    function isValidCoinEconomyConfig(data) {
+      let allowedFields = [
+        'coinName', 'coinSymbol',
+        'pointPerTask', 'pointPerWorkout', 'pointPerCheckIn',
+        'pointPerMilestone', 'pointPerOverdrive', 'pointPerDayClear', 'pointPerLevelUp',
+        'startingCoins', 'idrPerCoin',
+        'partnerName', 'partnerEnabled', 'partnerEndpoint',
+        'minRedeemCoins', 'transactionNote',
+        'updatedAt', 'updatedBy'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        isValidString(data.coinName, 1, 60) &&
+        isValidString(data.coinSymbol, 1, 16) &&
+        isIntInRange(data.pointPerTask, 0, 1000) &&
+        isIntInRange(data.pointPerWorkout, 0, 1000) &&
+        isIntInRange(data.pointPerCheckIn, 0, 1000) &&
+        isIntInRange(data.pointPerMilestone, 0, 1000) &&
+        isIntInRange(data.pointPerOverdrive, 0, 1000) &&
+        isIntInRange(data.pointPerDayClear, 0, 1000) &&
+        isIntInRange(data.pointPerLevelUp, 0, 1000) &&
+        isIntInRange(data.startingCoins, 0, 10000) &&
+        isNumberInRange(data.idrPerCoin, 0, 1000000) &&
+        isValidString(data.partnerName, 0, 80) &&
+        data.partnerEnabled is bool &&
+        isValidOptionalHttpUrl(data.partnerEndpoint, 300) &&
+        isIntInRange(data.minRedeemCoins, 1, 100000) &&
+        isValidString(data.transactionNote, 0, 300) &&
+        data.updatedAt is timestamp &&
+        isValidString(data.updatedBy, 1, 128);
+    }
+
     function isValidAiSecretConfig(data) {
       let allowedFields = [
         'baseUrl', 'model', 'apiKey', 'enabled',
@@ -331,14 +469,30 @@ service cloud.firestore {
         isValidString(data.updatedBy, 1, 128);
     }
 
-    function isValidUserAccount(data, userId) {
+    function isValidCoinPartnerSecret(data) {
       let allowedFields = [
+        'partnerName', 'merchantId', 'apiEndpoint',
+        'apiKey', 'webhookSecret', 'updatedAt', 'updatedBy'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        isValidString(data.partnerName, 0, 80) &&
+        isValidString(data.merchantId, 0, 120) &&
+        isValidOptionalHttpUrl(data.apiEndpoint, 300) &&
+        isValidString(data.apiKey, 0, 500) &&
+        isValidString(data.webhookSecret, 0, 500) &&
+        data.updatedAt is timestamp &&
+        isValidString(data.updatedBy, 1, 128);
+    }
+
+    function isValidUserAccount(data, userId) {
+      let requiredFields = [
         'ownerUid', 'displayName', 'email', 'language',
         'role', 'status', 'aiRequestsToday', 'aiTotalRequests',
         'aiQuotaDate', 'createdAt', 'updatedAt'
       ];
-      return hasOnlyAllowedFields(allowedFields) &&
-        hasRequiredFields(allowedFields) &&
+      return hasRequiredFields(requiredFields) &&
+        hasOnlyAllowedFields(requiredFields.concat(['telemetry'])) &&
         isNonEmptyString(data.ownerUid, 128) &&
         data.ownerUid == userId &&
         isValidString(data.displayName, 1, 120) &&
@@ -352,7 +506,8 @@ service cloud.firestore {
         isValidString(data.aiQuotaDate, 0, 10) &&
         (data.aiQuotaDate.size() == 0 || isValidDateKey(data.aiQuotaDate)) &&
         data.createdAt is timestamp &&
-        data.updatedAt is timestamp;
+        data.updatedAt is timestamp &&
+        (!('telemetry' in data) || isValidUserTelemetry(data.telemetry));
     }
 
     function isValidWorkout(data) {
@@ -374,17 +529,33 @@ service cloud.firestore {
         'dreamSteps', 'rewards', 'discoveredPerks',
         'growthNews', 'groundingSources', 'boss'
       ];
-      // Keep this owner-only schema under the rules expression limit.
+      let optionalFields = [
+        'career', 'gym',
+        'taskStreak', 'workoutStreak', 'longestStreak',
+        'longestTaskStreak', 'longestWorkoutStreak',
+        'lastActiveStreakDate', 'lastTaskStreakDate', 'lastWorkoutStreakDate'
+      ];
+      // Keep this schema concisely bounded within the rules expression limit.
       // The player serializer normalizes computed values before writing.
       let keys = data.keys();
-      return keys.hasAll(allowedFields) && keys.hasOnly(allowedFields.concat(['career', 'gym'])) &&
+      return keys.hasAll(allowedFields) && keys.hasOnly(allowedFields.concat(optionalFields)) &&
         data.ownerUid == userId && data.schemaVersion is int && data.updatedAt is timestamp &&
-        data.gender in ['male', 'female'] && data.name is string && data.goal is string &&
-        data.city is string && data.rewardInterest is string && data.profession is string &&
-        data.classTitle is string && data.coachAdvice is string && data.targetLevel is int &&
+        data.gender in ['male', 'female'] &&
+        isValidString(data.name, 0, 100) && isValidString(data.goal, 0, 300) &&
+        isValidString(data.city, 0, 100) && isValidString(data.rewardInterest, 0, 300) &&
+        isValidString(data.profession, 0, 160) && isValidString(data.classTitle, 0, 120) &&
+        isValidString(data.coachAdvice, 0, 1000) && data.targetLevel is int &&
         data.age is number && data.height is number && data.weight is number &&
         data.level is int && data.exp is int && data.maxExp is int && data.gold is int &&
         data.streak is int && data.coreCharge is int &&
+        isIntInRange(data.get('taskStreak', 0), 0, 100000) &&
+        isIntInRange(data.get('workoutStreak', 0), 0, 100000) &&
+        isIntInRange(data.get('longestStreak', 0), 0, 100000) &&
+        isIntInRange(data.get('longestTaskStreak', 0), 0, 100000) &&
+        isIntInRange(data.get('longestWorkoutStreak', 0), 0, 100000) &&
+        isValidString(data.get('lastActiveStreakDate', ''), 0, 10) &&
+        isValidString(data.get('lastTaskStreakDate', ''), 0, 10) &&
+        isValidString(data.get('lastWorkoutStreakDate', ''), 0, 10) &&
         data.sleepCondition in ['poor', 'moderate', 'optimal'] &&
         data.nutritionCondition in ['deficit', 'balanced', 'high_protein'] &&
         data.bio is map && data.dailyBreakdown is map && data.dailyDurationLog is map &&
@@ -455,6 +626,42 @@ service cloud.firestore {
         data.createdAt is timestamp;
     }
 
+    function isValidCoinTransaction(data, userId) {
+      let allowedFields = [
+        'ownerUid', 'type', 'source', 'amount', 'balanceAfter',
+        'note', 'partnerRef', 'actorUid', 'actorEmail', 'createdAt'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        data.ownerUid is string && data.ownerUid == userId &&
+        data.type is string && data.type in ['earn', 'redeem', 'admin_adjust', 'partner_tx'] &&
+        data.source is string && data.source in [
+          'task', 'workout', 'checkin', 'milestone', 'overdrive',
+          'day_clear', 'level_up', 'self_reward', 'admin', 'partner'
+        ] &&
+        isIntInRange(data.amount, -1000000, 1000000) &&
+        data.amount != 0 &&
+        isIntInRange(data.balanceAfter, 0, 10000000) &&
+        isValidString(data.note, 0, 240) &&
+        isValidString(data.partnerRef, 0, 120) &&
+        isValidString(data.actorUid, 1, 128) &&
+        data.actorUid == request.auth.uid &&
+        isValidString(data.actorEmail, 0, 254) &&
+        data.createdAt is int && data.createdAt >= 0;
+    }
+
+    function isValidCalendarSummary(data, userId) {
+      let allowedFields = ['ownerUid', 'source', 'syncedAt', 'eventCount', 'events'];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        data.ownerUid is string && data.ownerUid == userId &&
+        data.source is string && data.source in ['google_oauth', 'ics', 'none'] &&
+        data.syncedAt is int && data.syncedAt >= 0 &&
+        isIntInRange(data.eventCount, 0, 50) &&
+        isValidList(data.events, 50) &&
+        data.eventCount == data.events.size();
+    }
+
     // ===============================================================
     // Collection Rules
     // ===============================================================
@@ -484,26 +691,33 @@ service cloud.firestore {
         request.resource.data.updatedBy == request.auth.uid && request.resource.data.updatedAt == request.time;
     }
 
-    // Non-secret public AI configuration (strictly no API keys)
+    // Non-secret public app configuration (strictly no API keys or partner secrets)
     match /appConfig/{docId} {
-      allow get: if isAuthenticated() && docId == 'aiPublic';
+      allow get: if isAuthenticated() && docId in ['aiPublic', 'coinEconomy'];
       allow list: if isAdmin();
       allow create, update: if isAdmin() &&
         docId == 'aiPublic' &&
         isValidAiPublicConfig(request.resource.data);
+      allow create, update: if isAdmin() &&
+        docId == 'coinEconomy' &&
+        isValidCoinEconomyConfig(request.resource.data);
       allow delete: if false;
     }
 
-    // Admin-only AI provider API key vault (never readable by regular users)
+    // Admin-only secret vaults (never readable by regular users)
     match /adminSecrets/{docId} {
       allow get: if (isAdmin() || isAIProxy()) && docId == 'aiProvider';
+      allow get: if isAdmin() && docId == 'coinPartner';
       allow create, update: if isAdmin() &&
         docId == 'aiProvider' &&
         isValidAiSecretConfig(request.resource.data);
+      allow create, update: if isAdmin() &&
+        docId == 'coinPartner' &&
+        isValidCoinPartnerSecret(request.resource.data);
       allow list, delete: if false;
     }
 
-    // User Account Directory (self-service metadata + admin user management)
+    // User Account Directory (self-service metadata, optional telemetry + admin management)
     match /users/{userId} {
       allow get: if isOwner(userId) || isStaff() || isAIProxy();
       allow list: if isStaff();
@@ -519,45 +733,57 @@ service cloud.firestore {
           request.resource.data.aiQuotaDate == ''
         ));
       allow update: if isAuthenticated() &&
-        isValidUserAccount(request.resource.data, userId) &&
         uidNotModified() &&
-        request.resource.data.createdAt == resource.data.createdAt &&
-        (isAdmin() || (
-          isOwner(userId) &&
-          request.resource.data.email == request.auth.token.get('email', '') &&
-          (request.resource.data.role == resource.data.get('role', 'user') || request.resource.data.role == staffRole()) &&
-          request.resource.data.status == resource.data.get('status', 'active') &&
-          request.resource.data.aiRequestsToday == resource.data.get('aiRequestsToday', 0) &&
-          request.resource.data.aiTotalRequests == resource.data.get('aiTotalRequests', 0) &&
-          request.resource.data.aiQuotaDate == resource.data.get('aiQuotaDate', '')
-        ));
-      allow update: if staffRole() == 'operator' && !isStaffTarget(userId, resource.data.email) &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'aiRequestsToday', 'updatedAt']) &&
-        (request.resource.data.aiRequestsToday == resource.data.aiRequestsToday || request.resource.data.aiRequestsToday == 0) &&
-        isValidUserAccount(request.resource.data, userId);
-      allow update: if isAIProxy() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['aiRequestsToday', 'aiTotalRequests', 'aiQuotaDate']) &&
+        request.resource.data.createdAt == resource.data.createdAt && (
+          (isAIProxy() &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['aiRequestsToday', 'aiTotalRequests', 'aiQuotaDate'])) ||
+          (isOwner(userId) &&
+            request.resource.data.email == request.auth.token.get('email', '') &&
+            (request.resource.data.role == resource.data.get('role', 'user') || request.resource.data.role == staffRole()) &&
+            request.resource.data.status == resource.data.get('status', 'active') &&
+            request.resource.data.aiRequestsToday == resource.data.get('aiRequestsToday', 0) &&
+            request.resource.data.aiTotalRequests == resource.data.get('aiTotalRequests', 0) &&
+            request.resource.data.aiQuotaDate == resource.data.get('aiQuotaDate', '')) ||
+          isAdmin() ||
+          (staffRole() == 'operator' && !isStaffTarget(userId, resource.data.email) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'aiRequestsToday', 'updatedAt']) &&
+            (request.resource.data.aiRequestsToday == resource.data.aiRequestsToday || request.resource.data.aiRequestsToday == 0))
+        ) &&
         isValidUserAccount(request.resource.data, userId);
       allow delete: if isAdmin();
 
-      // Main player profile document (strictly owner-only, docId == 'main', no API keys)
+      // Main player profile document (owner & staff read; owner CRUD; admin coin/reward update)
       match /profile/{docId} {
-        allow get: if isOwner(userId) && docId == 'main';
-        allow create, update: if isOwner(userId) &&
+        allow get: if (isOwner(userId) || isStaff()) && docId == 'main';
+        allow create: if isOwner(userId) &&
           docId == 'main' &&
+          uidUnchanged(userId) &&
           isValidProfile(request.resource.data, userId);
+        allow update: if isOwner(userId) &&
+          docId == 'main' &&
+          uidNotModified() &&
+          isValidProfile(request.resource.data, userId);
+        allow update: if isAdmin() &&
+          docId == 'main' &&
+          uidNotModified() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['gold', 'rewards', 'updatedAt']) &&
+          isIntInRange(request.resource.data.gold, 0, 10000000) &&
+          isValidList(request.resource.data.rewards, 50) &&
+          request.resource.data.updatedAt is timestamp;
         allow delete: if isOwner(userId) && docId == 'main';
       }
 
+      // Check-ins, meals, sleep, moods, workouts & activity logs (owner & staff read; owner writes)
       match /journal/{entryId} {
-        allow read, delete: if isOwner(userId);
+        allow get, list: if isOwner(userId) || isStaff();
         allow create, update: if isOwner(userId) && isValidJournalEntry(request.resource.data, entryId);
+        allow delete: if isOwner(userId);
       }
 
-      // Daily progress logs keyed by YYYY-MM-DD (strictly owner-only)
+      // Daily progress logs keyed by YYYY-MM-DD (owner & staff read; owner writes)
       match /dailyLogs/{dateKey} {
-        allow get: if isOwner(userId) && isValidDateKey(dateKey);
-        allow list: if isOwner(userId);
+        allow get: if (isOwner(userId) || isStaff()) && isValidDateKey(dateKey);
+        allow list: if isOwner(userId) || isStaff();
         allow create: if isOwner(userId) &&
           isValidDateKey(dateKey) &&
           uidUnchanged(userId) &&
@@ -571,9 +797,43 @@ service cloud.firestore {
           isValidDailyLog(request.resource.data, userId, dateKey);
         allow delete: if isOwner(userId) && isValidDateKey(dateKey);
       }
+
+      // Immutable coin ledger (owner & staff read; owner earn/redeem create; admin full create)
+      match /coinTransactions/{txId} {
+        allow get, list: if isOwner(userId) || isStaff();
+        allow create: if (
+          (isOwner(userId) &&
+            request.resource.data.type in ['earn', 'redeem'] &&
+            request.resource.data.source in [
+              'task', 'workout', 'checkin', 'milestone',
+              'overdrive', 'day_clear', 'level_up', 'self_reward'
+            ]) ||
+          (isAdmin() &&
+            request.resource.data.type in ['admin_adjust', 'partner_tx', 'earn', 'redeem'] &&
+            request.resource.data.source in [
+              'admin', 'partner', 'task', 'workout', 'checkin',
+              'milestone', 'overdrive', 'day_clear', 'level_up', 'self_reward'
+            ])
+        ) && isValidCoinTransaction(request.resource.data, userId);
+        allow update, delete: if false;
+      }
+
+      // Synced calendar summary (owner & staff read; owner writes on 'latest')
+      match /calendar/{docId} {
+        allow get, list: if isOwner(userId) || isStaff();
+        allow create: if isOwner(userId) &&
+          docId == 'latest' &&
+          uidUnchanged(userId) &&
+          isValidCalendarSummary(request.resource.data, userId);
+        allow update: if isOwner(userId) &&
+          docId == 'latest' &&
+          uidNotModified() &&
+          isValidCalendarSummary(request.resource.data, userId);
+        allow delete: if isOwner(userId) && docId == 'latest';
+      }
     }
 
-    // Server-written AI usage audit logs (admin read-only)
+    // Server-written AI usage audit logs (admin/auditor read-only; AI proxy create)
     match /aiUsageLogs/{logId} {
       allow get, list: if canAuditAI();
       allow create: if isAIProxy() &&

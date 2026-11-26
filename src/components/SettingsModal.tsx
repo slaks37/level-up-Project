@@ -28,6 +28,7 @@ import { AGNES_PRESET_MODELS, testAIConnection } from '../services/aiService';
 import {
   getActiveFirebaseProjectId,
   isFirebaseReady,
+  sendPasswordReset,
   signInWithEmail,
   signInWithGoogle,
   signOutUser,
@@ -93,7 +94,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   } | null>(null);
 
   // Firebase Auth State
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authMode, setAuthMode] = useState<'login' | 'register' | 'reset'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -240,10 +241,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !password) return;
+    if (!email.trim()) return;
+    if (authMode !== 'reset' && !password) return;
     setAuthBusy(true);
     try {
-      if (authMode === 'register') {
+      if (authMode === 'reset') {
+        await sendPasswordReset(email);
+        onNotify(
+          lang === 'id'
+            ? `Link reset password telah dikirim ke ${email.trim()}. Cek inbox atau folder Spam.`
+            : `Password reset link sent to ${email.trim()}. Check your inbox or Spam folder.`,
+          'success'
+        );
+        setAuthMode('login');
+      } else if (authMode === 'register') {
         await signUpWithEmail(email, password, displayName);
         onNotify(
           lang === 'id'
@@ -600,6 +611,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
 
                   <form onSubmit={handleEmailAuth} className="space-y-2.5">
+                    {authMode === 'reset' && (
+                      <p className="rounded border border-sky-200 bg-sky-50 p-2 text-[11px] text-sky-900">
+                        {lang === 'id'
+                          ? 'Masukkan email akunmu untuk menerima tautan reset password.'
+                          : 'Enter your account email to receive a password reset link.'}
+                      </p>
+                    )}
                     {authMode === 'register' && (
                       <input
                         type="text"
@@ -618,43 +636,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       placeholder="email@example.com"
                       className="w-full px-3 py-2 rounded border border-slate-300 text-xs"
                     />
-                    <input
-                      type="password"
-                      required
-                      minLength={6}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder={lang === 'id' ? 'Password (min. 6 karakter)' : 'Password (min 6 chars)'}
-                      className="w-full px-3 py-2 rounded border border-slate-300 text-xs"
-                    />
+                    {authMode !== 'reset' && (
+                      <input
+                        type="password"
+                        required
+                        minLength={6}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder={lang === 'id' ? 'Password (min. 6 karakter)' : 'Password (min 6 chars)'}
+                        className="w-full px-3 py-2 rounded border border-slate-300 text-xs"
+                      />
+                    )}
                     <button
                       type="submit"
                       disabled={authBusy}
                       className="w-full py-2 rounded bg-sky-600 hover:bg-sky-700 text-white font-hud font-bold text-xs uppercase btn-anime"
                     >
-                      {authMode === 'register'
+                      {authMode === 'reset'
                         ? lang === 'id'
-                          ? 'DAFTAR AKUN BARU'
-                          : 'CREATE ACCOUNT'
-                        : lang === 'id'
-                          ? 'MASUK DENGAN EMAIL'
-                          : 'SIGN IN WITH EMAIL'}
+                          ? 'KIRIM LINK RESET PASSWORD'
+                          : 'SEND PASSWORD RESET LINK'
+                        : authMode === 'register'
+                          ? lang === 'id'
+                            ? 'DAFTAR AKUN BARU'
+                            : 'CREATE ACCOUNT'
+                          : lang === 'id'
+                            ? 'MASUK DENGAN EMAIL'
+                            : 'SIGN IN WITH EMAIL'}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setAuthMode((m) => (m === 'login' ? 'register' : 'login'))
-                      }
-                      className="w-full text-center text-[11px] font-semibold text-sky-700 hover:underline"
-                    >
-                      {authMode === 'login'
-                        ? lang === 'id'
-                          ? 'Belum punya akun? Daftar sekarang'
-                          : "Don't have an account? Sign up"
-                        : lang === 'id'
-                          ? 'Sudah punya akun? Masuk di sini'
-                          : 'Already have an account? Sign in'}
-                    </button>
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAuthMode((m) => (m === 'login' ? 'register' : 'login'))
+                        }
+                        className="text-[11px] font-semibold text-sky-700 hover:underline"
+                      >
+                        {authMode === 'login'
+                          ? lang === 'id'
+                            ? 'Belum punya akun? Daftar'
+                            : "Don't have an account? Sign up"
+                          : lang === 'id'
+                            ? '← Kembali ke Masuk'
+                            : '← Back to Sign in'}
+                      </button>
+                      {authMode !== 'reset' && (
+                        <button
+                          type="button"
+                          onClick={() => setAuthMode('reset')}
+                          className="text-[11px] font-semibold text-slate-600 hover:text-sky-800 hover:underline"
+                        >
+                          {lang === 'id' ? 'Lupa password?' : 'Forgot password?'}
+                        </button>
+                      )}
+                    </div>
                   </form>
                 </div>
               )}

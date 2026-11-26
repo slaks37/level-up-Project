@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  CoinEconomyConfig,
   DailyLogEntry,
   Language,
   PlayerProfile,
@@ -22,7 +23,7 @@ import type {
   QuestUnitType,
   WorkoutFeedback,
 } from '../types';
-import { computeScientificStatGains } from '../engine/science';
+import { computeScientificStatGains, DEFAULT_COIN_ECONOMY } from '../engine/science';
 
 export const ModalShell: React.FC<{
   title: string;
@@ -67,9 +68,10 @@ export const CompleteQuestModal: React.FC<{
   player: PlayerProfile;
   quest: Quest;
   lang: Language;
+  coinConfig?: CoinEconomyConfig;
   onConfirm: (qty: number, rpe: number, workout?: WorkoutFeedback) => void;
   onClose: () => void;
-}> = ({ player, quest, lang, onConfirm, onClose }) => {
+}> = ({ player, quest, lang, coinConfig = DEFAULT_COIN_ECONOMY, onConfirm, onClose }) => {
   const [qty, setQty] = useState(quest.defaultQty);
   const [rpe, setRpe] = useState(8);
   const fitness = quest.category === 'FITNESS';
@@ -81,8 +83,8 @@ export const CompleteQuestModal: React.FC<{
 
 
   const preview = useMemo(
-    () => computeScientificStatGains(player, quest, actual, rpe),
-    [player, quest, actual, rpe]
+    () => computeScientificStatGains(player, quest, actual, rpe, coinConfig),
+    [player, quest, actual, rpe, coinConfig]
   );
 
   const rpeDesc =
@@ -173,11 +175,16 @@ export const CompleteQuestModal: React.FC<{
 
         <div className="p-3 rounded bg-emerald-50 border border-emerald-200 space-y-1.5 text-xs">
           <div className="flex justify-between font-mono text-[11px] font-bold text-emerald-900">
-            <span>{lang === 'id' ? 'PREDIKSI HADIAH ILMIAH:' : 'SCIENTIFIC REWARD PREVIEW:'}</span>
+            <span>{lang === 'id' ? 'PREDIKSI HADIAH:' : 'REWARD PREVIEW:'}</span>
             <span>
-              +{preview.expEarned} EXP • +{preview.goldEarned} CR
+              +{preview.goldEarned} {coinConfig.coinSymbol} • +{preview.expEarned} EXP
             </span>
           </div>
+          <p className="text-[10px] font-semibold text-orange-800">
+            🔥 {fitness
+              ? (id ? 'Menjaga Streak Harian & Streak Workout hari ini' : 'Updates today’s Daily Streak & Workout Streak')
+              : (id ? 'Menjaga Streak Harian & Streak Tugas hari ini' : 'Updates today’s Daily Streak & Task Streak')}
+          </p>
           <div className="flex flex-wrap gap-1.5 font-mono text-[10px]">
             {preview.gains.str > 0 && (
               <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-bold">
@@ -562,8 +569,8 @@ export const AddQuestModal: React.FC<{
             estMinutes: unitType === 'REPS' ? 20 : Math.max(5, defaultQty),
             skillTag: skillTag.trim() || (category === 'FITNESS' ? 'Kebugaran Rutin' : 'Fokus Harian'),
             dreamStepId: category === 'FITNESS' ? null : activeStep?.id ?? null,
-            exp: 45,
-            gold: 35,
+            exp: 20,
+            gold: 1,
             completed: false,
           });
         }}
@@ -722,11 +729,12 @@ export const AddSkillModal: React.FC<{
 // 8. ADD SELF-REWARD MODAL
 export const AddRewardModal: React.FC<{
   lang: Language;
+  coinSymbol?: string;
   onAdd: (name: string, cost: number, desc: string) => void;
   onClose: () => void;
-}> = ({ lang, onAdd, onClose }) => {
+}> = ({ lang, coinSymbol = 'KOIN', onAdd, onClose }) => {
   const [name, setName] = useState('');
-  const [cost, setCost] = useState(100);
+  const [cost, setCost] = useState(5);
   const [desc, setDesc] = useState('');
 
   return (
@@ -741,7 +749,7 @@ export const AddRewardModal: React.FC<{
           if (!name.trim()) return;
           onAdd(
             name.trim(),
-            Math.max(10, cost),
+            Math.max(1, cost),
             desc.trim() ||
               (lang === 'id' ? 'Hadiah kustom pilihanmu sendiri.' : 'Your custom self-reward.')
           );
@@ -765,15 +773,15 @@ export const AddRewardModal: React.FC<{
         </div>
         <div>
           <label className="block text-xs font-bold text-slate-700 mb-1">
-            {lang === 'id' ? 'Harga Koin (CR)' : 'Coin Cost (CR)'}
+            {lang === 'id' ? `Harga Koin (${coinSymbol})` : `Coin Cost (${coinSymbol})`}
           </label>
           <input
             type="number"
             required
-            min={10}
-            max={5000}
+            min={1}
+            max={50000}
             value={cost}
-            onChange={(e) => setCost(Number(e.target.value) || 100)}
+            onChange={(e) => setCost(Math.max(1, Number(e.target.value) || 1))}
             className="w-full px-3 py-2 rounded border border-slate-300 font-mono text-sm"
           />
         </div>
@@ -804,16 +812,18 @@ export const CompleteDayModal: React.FC<{
   player: PlayerProfile;
   recentLogs: DailyLogEntry[];
   lang: Language;
+  coinConfig?: CoinEconomyConfig;
   onConfirmCompleteDay: () => void;
   onClose: () => void;
-}> = ({ player, recentLogs, lang, onConfirmCompleteDay, onClose }) => {
+}> = ({ player, recentLogs, lang, coinConfig = DEFAULT_COIN_ECONOMY, onConfirmCompleteDay, onClose }) => {
   const completedCount = player.quests.filter((q) => q.completed).length;
   const totalCount = player.quests.length;
-  const qualifiesBonus = completedCount >= 2;
+  const qualifiesBonus = completedCount >= 1;
   const totalMinutes =
     player.dailyDurationLog.study +
     player.dailyDurationLog.work +
     player.dailyDurationLog.fitness;
+  const symbol = coinConfig.coinSymbol || 'KOIN';
 
   return (
     <ModalShell
@@ -845,11 +855,11 @@ export const CompleteDayModal: React.FC<{
         <p className="text-[11px] text-slate-600">
           {qualifiesBonus
             ? lang === 'id'
-              ? `Mantap! Total ${totalMinutes} menit tercatat. Menutup hari ini menambah Streak +1 dan memberikan bonus +40 EXP & +40 CR, lalu menyegarkan daftar tugas untuk besok.`
-              : `Awesome! ${totalMinutes} mins logged. Completing the day adds +1 Streak, +40 EXP & +40 CR bonus, and refreshes daily tasks for tomorrow.`
+              ? `Mantap! Total ${totalMinutes} menit tercatat. Menutup hari ini menyimpan rekap harian, memberikan +${coinConfig.pointPerDayClear} ${symbol}, dan menyegarkan daftar tugas untuk besok.`
+              : `Awesome! ${totalMinutes} mins logged. Completing the day saves your daily log, grants +${coinConfig.pointPerDayClear} ${symbol}, and refreshes daily tasks for tomorrow.`
             : lang === 'id'
-              ? 'Selesaikan minimal 2 tugas untuk mendapatkan bonus Streak +1 & +40 EXP. Kamu tetap bisa menyegarkan tugas hari ini sekarang.'
-              : 'Complete at least 2 tasks to earn the +1 Streak & +40 EXP bonus. You can still reset today’s task board now.'}
+              ? `Selesaikan minimal 1 tugas atau workout untuk mendapatkan +${coinConfig.pointPerDayClear} ${symbol} & menjaga streak. Kamu tetap bisa menyegarkan tugas hari ini sekarang.`
+              : `Complete at least 1 task or workout to earn +${coinConfig.pointPerDayClear} ${symbol} & keep your streak. You can still refresh today’s task board now.`}
         </p>
       </div>
 

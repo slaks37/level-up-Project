@@ -1,6 +1,7 @@
 import { getActiveDreamStep } from './coaching';
 import type {
   Biometrics,
+  CoinEconomyConfig,
   DailyBreakdown,
   DreamStep,
   Gender,
@@ -13,6 +14,69 @@ import type {
 } from '../types';
 
 export const PLAYER_SCHEMA_VERSION = 3;
+
+export const DEFAULT_COIN_ECONOMY: CoinEconomyConfig = {
+  coinName: 'Koin Hadiah',
+  coinSymbol: 'KOIN',
+  pointPerTask: 1,
+  pointPerWorkout: 1,
+  pointPerCheckIn: 1,
+  pointPerMilestone: 1,
+  pointPerOverdrive: 1,
+  pointPerDayClear: 1,
+  pointPerLevelUp: 1,
+  startingCoins: 0,
+  idrPerCoin: 0,
+  partnerName: 'MyValue',
+  partnerEnabled: false,
+  partnerEndpoint: '',
+  minRedeemCoins: 10,
+  transactionNote: '',
+};
+
+export function getOffsetDateKey(dateKey: string, deltaDays: number): string {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const dt = new Date(Date.UTC(y || 2026, (m || 1) - 1, (d || 1) + deltaDays));
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+export function getEffectiveStreak(
+  count: number | undefined,
+  lastDate: string | undefined,
+  today = getTodayDateKey()
+): number {
+  const safeCount = Math.max(0, Math.round(Number(count) || 0));
+  if (safeCount === 0) return 0;
+  if (!lastDate) return safeCount;
+  if (lastDate === today || lastDate === getOffsetDateKey(today, -1)) return safeCount;
+  return 0;
+}
+
+export function advanceStreakCounter(
+  currentCount: number | undefined,
+  currentLongest: number | undefined,
+  lastDate: string | undefined,
+  today = getTodayDateKey()
+): { count: number; longest: number; lastDate: string; incremented: boolean } {
+  const prevCount = Math.max(0, Math.round(Number(currentCount) || 0));
+  const prevLongest = Math.max(prevCount, Math.round(Number(currentLongest) || 0));
+  if (lastDate === today) {
+    const count = Math.max(1, prevCount);
+    return { count, longest: Math.max(prevLongest, count), lastDate: today, incremented: false };
+  }
+  const yesterday = getOffsetDateKey(today, -1);
+  const consecutive = lastDate === yesterday || (!lastDate && prevCount > 0);
+  const nextCount = consecutive ? prevCount + 1 : 1;
+  return {
+    count: nextCount,
+    longest: Math.max(prevLongest, nextCount),
+    lastDate: today,
+    incremented: true,
+  };
+}
 
 // =========================================================================
 // BIOMETRICS & SCIENTIFIC ENGINE
@@ -57,7 +121,8 @@ export function computeScientificStatGains(
   player: PlayerProfile,
   quest: Quest,
   qty: number,
-  rpe: number
+  rpe: number,
+  coinConfig: CoinEconomyConfig = DEFAULT_COIN_ECONOMY
 ): ScientificGainResult {
   const safeQty = Math.max(1, qty);
   const safeRpe = Math.max(5, Math.min(10, rpe));
@@ -95,8 +160,10 @@ export function computeScientificStatGains(
   }
 
   const volumeScale = Math.min(2.0, Math.max(0.5, safeQty / Math.max(1, quest.defaultQty)));
-  const expEarned = Math.max(15, Math.round((quest.exp || 40) * intensityFactor * baselineGameBalance * volumeScale));
-  const goldEarned = Math.max(10, Math.round((quest.gold || 35) * intensityFactor * volumeScale));
+  const expEarned = Math.max(10, Math.round((quest.exp || 20) * intensityFactor * baselineGameBalance * volumeScale));
+  const configuredCoins =
+    quest.category === 'FITNESS' ? coinConfig.pointPerWorkout : coinConfig.pointPerTask;
+  const goldEarned = Math.max(0, Math.round(configuredCoins));
   const loggedMinutes =
     quest.unitType === 'MINUTES'
       ? Math.round(safeQty)
@@ -115,21 +182,29 @@ export function computeDailyDurationBreakdown(totalMinutes: number, bio?: Biomet
   return { total: study + work + fitness, study, work, fitness };
 }
 
-export function applyExpAndLevelUp(player: PlayerProfile, amount: number): {
+export function applyExpAndLevelUp(
+  player: PlayerProfile,
+  amount: number,
+  coinConfig: CoinEconomyConfig = DEFAULT_COIN_ECONOMY
+): {
   nextPlayer: PlayerProfile;
   levelsGained: number;
+  levelUpGold: number;
 } {
   let exp = player.exp + Math.max(0, Math.round(amount));
   let level = player.level;
   let maxExp = player.maxExp;
   let gold = player.gold;
   let levelsGained = 0;
+  let levelUpGold = 0;
+  const perLevelCoin = Math.max(0, Math.round(coinConfig.pointPerLevelUp));
 
   while (exp >= maxExp && level < 999) {
     exp -= maxExp;
     level += 1;
     maxExp = Math.round(maxExp * 1.25);
-    gold += 50;
+    gold += perLevelCoin;
+    levelUpGold += perLevelCoin;
     levelsGained += 1;
   }
 
@@ -142,6 +217,7 @@ export function applyExpAndLevelUp(player: PlayerProfile, amount: number): {
       gold,
     },
     levelsGained,
+    levelUpGold,
   };
 }
 
@@ -166,20 +242,27 @@ export function applyQuestCompletion(
   questId: string,
   qty: number,
   rpe: number,
-  lang: Language
+  lang: Language,
+  coinConfig: CoinEconomyConfig = DEFAULT_COIN_ECONOMY,
+  today = getTodayDateKey()
 ): {
   nextPlayer: PlayerProfile;
   result: ScientificGainResult;
   levelsGained: number;
+  levelUpGold: number;
+  milestoneGold: number;
   unlockedSkill: string | null;
   autoCompletedStepTitle: string | null;
+  streakIncremented: boolean;
+  taskStreakIncremented: boolean;
+  workoutStreakIncremented: boolean;
 } {
   const quest = player.quests.find((q) => q.id === questId);
   if (!quest || quest.completed) {
     throw new Error('Quest not found or already completed');
   }
 
-  const result = computeScientificStatGains(player, quest, qty, rpe);
+  const result = computeScientificStatGains(player, quest, qty, rpe, coinConfig);
 
   const nextStats: PlayerStats = {
     str: +(player.stats.str + result.gains.str).toFixed(2),
@@ -202,6 +285,7 @@ export function applyQuestCompletion(
 
   // Sync progress into linked Dream Step (or first active step if study/career)
   let autoCompletedStepTitle: string | null = null;
+  let milestoneNewlyRewarded = false;
   const targetStepId = quest.dreamStepId === undefined && quest.category !== 'FITNESS'
     ? getActiveDreamStep(player)?.id : quest.dreamStepId;
 
@@ -209,11 +293,15 @@ export function applyQuestCompletion(
     if (step.id !== targetStepId || step.completed || step.archived) return step;
     const nextMins = step.completedMinutes + result.loggedMinutes;
     const reached = nextMins >= step.targetMinutes;
-    if (reached) autoCompletedStepTitle = step.title;
+    if (reached) {
+      autoCompletedStepTitle = step.title;
+      if (!step.rewarded) milestoneNewlyRewarded = true;
+    }
     return {
       ...step,
       completedMinutes: nextMins,
       completed: reached ? true : step.completed,
+      rewarded: reached ? true : step.rewarded,
     };
   });
 
@@ -281,13 +369,57 @@ export function applyQuestCompletion(
     )
   );
 
-  const bonusExpFromStep = autoCompletedStepTitle ? 60 : 0;
-  const bonusGoldFromStep = autoCompletedStepTitle ? 50 : 0;
+  // Automatic Daily Streak + Task Streak + Workout Streak
+  const overallStreak = advanceStreakCounter(
+    player.streak,
+    player.longestStreak,
+    player.lastActiveStreakDate,
+    today
+  );
+  const isWorkout = quest.category === 'FITNESS';
+  const taskStreakRes = isWorkout
+    ? {
+        count: player.taskStreak ?? 0,
+        longest: player.longestTaskStreak ?? 0,
+        lastDate: player.lastTaskStreakDate || '',
+        incremented: false,
+      }
+    : advanceStreakCounter(
+        player.taskStreak,
+        player.longestTaskStreak,
+        player.lastTaskStreakDate,
+        today
+      );
+  const workoutStreakRes = isWorkout
+    ? advanceStreakCounter(
+        player.workoutStreak,
+        player.longestWorkoutStreak,
+        player.lastWorkoutStreakDate,
+        today
+      )
+    : {
+        count: player.workoutStreak ?? 0,
+        longest: player.longestWorkoutStreak ?? 0,
+        lastDate: player.lastWorkoutStreakDate || '',
+        incremented: false,
+      };
+
+  const bonusExpFromStep = autoCompletedStepTitle ? 25 : 0;
+  const milestoneGold = milestoneNewlyRewarded ? Math.max(0, Math.round(coinConfig.pointPerMilestone)) : 0;
 
   const baseUpdated: PlayerProfile = {
     ...player,
     stats: nextStats,
-    gold: player.gold + result.goldEarned + bonusGoldFromStep,
+    gold: player.gold + result.goldEarned + milestoneGold,
+    streak: overallStreak.count,
+    longestStreak: overallStreak.longest,
+    lastActiveStreakDate: overallStreak.lastDate,
+    taskStreak: taskStreakRes.count,
+    longestTaskStreak: taskStreakRes.longest,
+    lastTaskStreakDate: taskStreakRes.lastDate,
+    workoutStreak: workoutStreakRes.count,
+    longestWorkoutStreak: workoutStreakRes.longest,
+    lastWorkoutStreakDate: workoutStreakRes.lastDate,
     coreCharge: Math.min(4, (player.coreCharge || 0) + 1),
     dailyDurationLog: nextLog,
     quests: nextQuests,
@@ -300,17 +432,23 @@ export function applyQuestCompletion(
     },
   };
 
-  const { nextPlayer, levelsGained } = applyExpAndLevelUp(
+  const { nextPlayer, levelsGained, levelUpGold } = applyExpAndLevelUp(
     baseUpdated,
-    result.expEarned + bonusExpFromStep
+    result.expEarned + bonusExpFromStep,
+    coinConfig
   );
 
   return {
     nextPlayer,
     result,
     levelsGained,
+    levelUpGold,
+    milestoneGold,
     unlockedSkill,
     autoCompletedStepTitle,
+    streakIncremented: overallStreak.incremented,
+    taskStreakIncremented: taskStreakRes.incremented,
+    workoutStreakIncremented: workoutStreakRes.incremented,
   };
 }
 
@@ -322,7 +460,7 @@ export function getDefaultRewards(lang: Language): SelfReward[] {
     {
       id: 'rew_1',
       name: lang === 'id' ? 'Kopi / Minuman Favorit' : 'Favorite Specialty Coffee',
-      cost: 80,
+      cost: 5,
       desc:
         lang === 'id'
           ? 'Nikmati istirahat 20 menit tanpa rasa bersalah.'
@@ -331,7 +469,7 @@ export function getDefaultRewards(lang: Language): SelfReward[] {
     {
       id: 'rew_2',
       name: lang === 'id' ? 'Nonton 1 Episode Anime / Film' : 'Watch 1 Anime / Series Episode',
-      cost: 120,
+      cost: 8,
       desc:
         lang === 'id'
           ? 'Hiburan santai setelah tugas harian tuntas.'
@@ -340,7 +478,7 @@ export function getDefaultRewards(lang: Language): SelfReward[] {
     {
       id: 'rew_3',
       name: lang === 'id' ? 'Cheat Meal Sehat Favorit' : 'Favorite Healthy Cheat Meal',
-      cost: 200,
+      cost: 15,
       desc:
         lang === 'id'
           ? 'Makanan enak untuk isi ulang energi.'
@@ -349,7 +487,7 @@ export function getDefaultRewards(lang: Language): SelfReward[] {
     {
       id: 'rew_4',
       name: lang === 'id' ? 'Beli Buku / Gear Baru' : 'Buy New Book / Desk Gear',
-      cost: 450,
+      cost: 30,
       desc:
         lang === 'id'
           ? 'Investasi alat pendukung hobimu.'
@@ -529,7 +667,10 @@ export interface CreateProfileInput {
   lang: Language;
 }
 
-export function createInitialPlayerProfile(input: CreateProfileInput): PlayerProfile {
+export function createInitialPlayerProfile(
+  input: CreateProfileInput,
+  coinConfig: CoinEconomyConfig = DEFAULT_COIN_ECONOMY
+): PlayerProfile {
   const isCustom = Boolean(input.customProfName && input.customProfName.trim());
   const profName = isCustom ? input.customProfName!.trim() : input.selectedPreset.name;
   const classTitle = isCustom ? 'Awakened Vanguard' : input.selectedPreset.classTitle;
@@ -581,9 +722,17 @@ export function createInitialPlayerProfile(input: CreateProfileInput): PlayerPro
     level: 1,
     exp: 0,
     maxExp: 100,
-    gold: 100,
-    streak: 1,
-    coreCharge: 1,
+    gold: Math.max(0, Math.round(coinConfig.startingCoins ?? 0)),
+    streak: 0,
+    taskStreak: 0,
+    workoutStreak: 0,
+    longestStreak: 0,
+    longestTaskStreak: 0,
+    longestWorkoutStreak: 0,
+    lastActiveStreakDate: '',
+    lastTaskStreakDate: '',
+    lastWorkoutStreakDate: '',
+    coreCharge: 0,
     sleepCondition: 'moderate',
     nutritionCondition: 'balanced',
     stats: { str: 10, vit: 10, int: 10, agi: 10, cha: 10 },
@@ -649,7 +798,15 @@ export function normalizePlayerProfile(raw: Partial<PlayerProfile>, lang: Langua
     exp: Math.max(0, Number(raw.exp) || 0),
     maxExp: Math.max(100, Number(raw.maxExp) || 100),
     gold: Math.max(0, Number(raw.gold) || 0),
-    streak: Math.max(0, Number(raw.streak) || 1),
+    streak: Math.max(0, Number(raw.streak) || 0),
+    taskStreak: Math.max(0, Number(raw.taskStreak) || 0),
+    workoutStreak: Math.max(0, Number(raw.workoutStreak) || 0),
+    longestStreak: Math.max(Number(raw.streak) || 0, Number(raw.longestStreak) || 0),
+    longestTaskStreak: Math.max(Number(raw.taskStreak) || 0, Number(raw.longestTaskStreak) || 0),
+    longestWorkoutStreak: Math.max(Number(raw.workoutStreak) || 0, Number(raw.longestWorkoutStreak) || 0),
+    lastActiveStreakDate: typeof raw.lastActiveStreakDate === 'string' ? raw.lastActiveStreakDate.slice(0, 10) : '',
+    lastTaskStreakDate: typeof raw.lastTaskStreakDate === 'string' ? raw.lastTaskStreakDate.slice(0, 10) : '',
+    lastWorkoutStreakDate: typeof raw.lastWorkoutStreakDate === 'string' ? raw.lastWorkoutStreakDate.slice(0, 10) : '',
     coreCharge: Math.max(0, Math.min(4, Number(raw.coreCharge) || 0)),
     sleepCondition: raw.sleepCondition || 'moderate',
     nutritionCondition: raw.nutritionCondition || 'balanced',

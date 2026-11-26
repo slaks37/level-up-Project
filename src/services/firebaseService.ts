@@ -43,14 +43,22 @@ import {
 import type {
   AdminAISecretConfig,
   AIUsageLogRecord,
+  CoinEconomyConfig,
+  CoinPartnerSecretConfig,
+  CoinTransactionRecord,
+  CoinTransactionSource,
+  CoinTransactionType,
   DailyLogEntry,
   FirebaseRuntimeConfig,
   Language,
   PlayerProfile,
   SharedAIPublicConfig,
+  SyncedCalendarEventItem,
+  SyncedCalendarRecord,
   UserAccountRecord,
+  UserTelemetrySummary,
 } from '../types';
-import { normalizePlayerProfile, PLAYER_SCHEMA_VERSION } from '../engine/science';
+import { DEFAULT_COIN_ECONOMY, normalizePlayerProfile, PLAYER_SCHEMA_VERSION } from '../engine/science';
 import { loadRuntimeFirebaseConfig } from './storageService';
 import type { JournalEntry } from '../engine/journal';
 import { requestGoogleToken } from './googleCalendar';
@@ -478,12 +486,192 @@ export async function saveAdminSharedAIConfig(
   await batch.commit();
 }
 
+function parseCoinEconomy(data: Record<string, unknown> | undefined): CoinEconomyConfig {
+  if (!data) return { ...DEFAULT_COIN_ECONOMY };
+  const clampInt = (v: unknown, fallback: number, min: number, max: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;
+  };
+  const idrNum = Number(data.idrPerCoin);
+  return {
+    coinName: String(data.coinName || DEFAULT_COIN_ECONOMY.coinName).trim().slice(0, 60) || DEFAULT_COIN_ECONOMY.coinName,
+    coinSymbol: String(data.coinSymbol || DEFAULT_COIN_ECONOMY.coinSymbol).trim().slice(0, 16) || DEFAULT_COIN_ECONOMY.coinSymbol,
+    pointPerTask: clampInt(data.pointPerTask, DEFAULT_COIN_ECONOMY.pointPerTask, 0, 1000),
+    pointPerWorkout: clampInt(data.pointPerWorkout, DEFAULT_COIN_ECONOMY.pointPerWorkout, 0, 1000),
+    pointPerCheckIn: clampInt(data.pointPerCheckIn, DEFAULT_COIN_ECONOMY.pointPerCheckIn, 0, 1000),
+    pointPerMilestone: clampInt(data.pointPerMilestone, DEFAULT_COIN_ECONOMY.pointPerMilestone, 0, 1000),
+    pointPerOverdrive: clampInt(data.pointPerOverdrive, DEFAULT_COIN_ECONOMY.pointPerOverdrive, 0, 1000),
+    pointPerDayClear: clampInt(data.pointPerDayClear, DEFAULT_COIN_ECONOMY.pointPerDayClear, 0, 1000),
+    pointPerLevelUp: clampInt(data.pointPerLevelUp, DEFAULT_COIN_ECONOMY.pointPerLevelUp, 0, 1000),
+    startingCoins: clampInt(data.startingCoins, DEFAULT_COIN_ECONOMY.startingCoins, 0, 10000),
+    idrPerCoin: Number.isFinite(idrNum) ? Math.max(0, Math.min(1000000, idrNum)) : 0,
+    partnerName: String(data.partnerName ?? DEFAULT_COIN_ECONOMY.partnerName).slice(0, 80),
+    partnerEnabled: Boolean(data.partnerEnabled),
+    partnerEndpoint: String(data.partnerEndpoint ?? '').slice(0, 300),
+    minRedeemCoins: clampInt(data.minRedeemCoins, DEFAULT_COIN_ECONOMY.minRedeemCoins, 1, 100000),
+    transactionNote: String(data.transactionNote ?? '').slice(0, 300),
+    updatedBy: String(data.updatedBy || ''),
+  };
+}
+
+export async function fetchCoinEconomyConfig(): Promise<CoinEconomyConfig> {
+  if (!firestoreDb) return { ...DEFAULT_COIN_ECONOMY };
+  const snap = await getDoc(doc(firestoreDb, 'appConfig', 'coinEconomy'));
+  if (!snap.exists()) return { ...DEFAULT_COIN_ECONOMY };
+  return parseCoinEconomy(snap.data());
+}
+
+export function subscribeCoinEconomyConfig(
+  callback: (cfg: CoinEconomyConfig) => void
+): Unsubscribe {
+  if (!firestoreDb) return () => {};
+  return onSnapshot(
+    doc(firestoreDb, 'appConfig', 'coinEconomy'),
+    (snap) => {
+      callback(snap.exists() ? parseCoinEconomy(snap.data()) : { ...DEFAULT_COIN_ECONOMY });
+    },
+    () => callback({ ...DEFAULT_COIN_ECONOMY })
+  );
+}
+
+export async function saveCoinEconomyConfig(
+  adminUser: User,
+  payload: Omit<CoinEconomyConfig, 'updatedBy'>
+): Promise<void> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  const endpoint = payload.partnerEndpoint.trim();
+  if (endpoint && !/^https?:\/\/.+/.test(endpoint)) {
+    throw new Error('URL endpoint partner harus diawali http:// atau https://');
+  }
+  const updatedBy = (adminUser.email || adminUser.uid).slice(0, 128);
+  const clean = parseCoinEconomy({ ...payload, partnerEndpoint: endpoint, updatedBy });
+  await setDoc(doc(firestoreDb, 'appConfig', 'coinEconomy'), {
+    coinName: clean.coinName,
+    coinSymbol: clean.coinSymbol,
+    pointPerTask: clean.pointPerTask,
+    pointPerWorkout: clean.pointPerWorkout,
+    pointPerCheckIn: clean.pointPerCheckIn,
+    pointPerMilestone: clean.pointPerMilestone,
+    pointPerOverdrive: clean.pointPerOverdrive,
+    pointPerDayClear: clean.pointPerDayClear,
+    pointPerLevelUp: clean.pointPerLevelUp,
+    startingCoins: clean.startingCoins,
+    idrPerCoin: clean.idrPerCoin,
+    partnerName: clean.partnerName,
+    partnerEnabled: clean.partnerEnabled,
+    partnerEndpoint: clean.partnerEndpoint,
+    minRedeemCoins: clean.minRedeemCoins,
+    transactionNote: clean.transactionNote,
+    updatedAt: serverTimestamp(),
+    updatedBy,
+  });
+}
+
+export async function fetchCoinPartnerSecret(): Promise<CoinPartnerSecretConfig | null> {
+  if (!firestoreDb) return null;
+  const snap = await getDoc(doc(firestoreDb, 'adminSecrets', 'coinPartner'));
+  if (!snap.exists()) return null;
+  const d = snap.data();
+  return {
+    partnerName: String(d.partnerName || 'MyValue'),
+    merchantId: String(d.merchantId || ''),
+    apiEndpoint: String(d.apiEndpoint || ''),
+    apiKey: String(d.apiKey || ''),
+    webhookSecret: String(d.webhookSecret || ''),
+    updatedBy: String(d.updatedBy || ''),
+  };
+}
+
+export async function saveCoinPartnerSecret(
+  adminUser: User,
+  payload: Omit<CoinPartnerSecretConfig, 'updatedBy'>
+): Promise<void> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  const endpoint = payload.apiEndpoint.trim();
+  if (endpoint && !/^https?:\/\/.+/.test(endpoint)) {
+    throw new Error('URL endpoint partner harus diawali http:// atau https://');
+  }
+  const updatedBy = (adminUser.email || adminUser.uid).slice(0, 128);
+  await setDoc(doc(firestoreDb, 'adminSecrets', 'coinPartner'), {
+    partnerName: payload.partnerName.trim().slice(0, 80),
+    merchantId: payload.merchantId.trim().slice(0, 120),
+    apiEndpoint: endpoint.slice(0, 300),
+    apiKey: payload.apiKey.trim().slice(0, 500),
+    webhookSecret: payload.webhookSecret.trim().slice(0, 500),
+    updatedAt: serverTimestamp(),
+    updatedBy,
+  });
+}
+
+function parseUserTelemetry(raw: unknown): UserTelemetrySummary | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const d = raw as Record<string, unknown>;
+  return {
+    name: String(d.name || ''),
+    profession: String(d.profession || ''),
+    goal: String(d.goal || ''),
+    level: Math.max(1, Number(d.level) || 1),
+    gold: Math.max(0, Number(d.gold) || 0),
+    streak: Math.max(0, Number(d.streak) || 0),
+    taskStreak: Math.max(0, Number(d.taskStreak) || 0),
+    workoutStreak: Math.max(0, Number(d.workoutStreak) || 0),
+    completedTasksTotal: Math.max(0, Number(d.completedTasksTotal) || 0),
+    completedWorkoutsTotal: Math.max(0, Number(d.completedWorkoutsTotal) || 0),
+    lastMood: String(d.lastMood || ''),
+    lastEnergy: String(d.lastEnergy || ''),
+    lastSleepHours: typeof d.lastSleepHours === 'number' && Number.isFinite(d.lastSleepHours) ? d.lastSleepHours : null,
+    hasPainAlert: Boolean(d.hasPainAlert),
+    projectBlocked: Boolean(d.projectBlocked),
+    lastActiveDate: String(d.lastActiveDate || ''),
+    updatedAt: Number(d.updatedAt) || 0,
+  };
+}
+
+function sanitizeTelemetryForFirestore(t: UserTelemetrySummary) {
+  return {
+    name: (t.name || '').slice(0, 100),
+    profession: (t.profession || '').slice(0, 160),
+    goal: (t.goal || '').slice(0, 300),
+    level: Math.max(1, Math.min(999, Math.round(t.level || 1))),
+    gold: Math.max(0, Math.min(10000000, Math.round(t.gold || 0))),
+    streak: Math.max(0, Math.min(100000, Math.round(t.streak || 0))),
+    taskStreak: Math.max(0, Math.min(100000, Math.round(t.taskStreak || 0))),
+    workoutStreak: Math.max(0, Math.min(100000, Math.round(t.workoutStreak || 0))),
+    completedTasksTotal: Math.max(0, Math.min(1000000, Math.round(t.completedTasksTotal || 0))),
+    completedWorkoutsTotal: Math.max(0, Math.min(1000000, Math.round(t.completedWorkoutsTotal || 0))),
+    lastMood: (t.lastMood || '').slice(0, 30),
+    lastEnergy: (t.lastEnergy || '').slice(0, 30),
+    lastSleepHours:
+      typeof t.lastSleepHours === 'number' && Number.isFinite(t.lastSleepHours)
+        ? Math.max(0, Math.min(24, t.lastSleepHours))
+        : null,
+    hasPainAlert: Boolean(t.hasPainAlert),
+    projectBlocked: Boolean(t.projectBlocked),
+    lastActiveDate: (t.lastActiveDate || '').slice(0, 10),
+    updatedAt: Math.max(0, Math.round(t.updatedAt || Date.now())),
+  };
+}
+
+export async function syncUserTelemetrySummary(
+  uid: string,
+  summary: UserTelemetrySummary
+): Promise<void> {
+  if (!firestoreDb) return;
+  const userRef = doc(firestoreDb, 'users', uid);
+  await updateDoc(userRef, {
+    telemetry: sanitizeTelemetryForFirestore(summary),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export async function fetchAllUsersForAdmin(): Promise<UserAccountRecord[]> {
   if (!firestoreDb) return [];
   const q = query(collection(firestoreDb, 'users'), orderBy('updatedAt', 'desc'), limit(200));
   const snap = await getDocs(q);
   return snap.docs.map((d) => {
     const data = d.data();
+    const created = data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : undefined;
+    const updated = data.updatedAt?.toDate ? data.updatedAt.toDate().toISOString() : undefined;
     return {
       ownerUid: String(data.ownerUid || d.id),
       displayName: String(data.displayName || 'Hunter'),
@@ -494,6 +682,9 @@ export async function fetchAllUsersForAdmin(): Promise<UserAccountRecord[]> {
       aiRequestsToday: Number(data.aiRequestsToday || 0),
       aiTotalRequests: Number(data.aiTotalRequests || 0),
       aiQuotaDate: String(data.aiQuotaDate || ''),
+      telemetry: parseUserTelemetry(data.telemetry),
+      createdAt: created,
+      updatedAt: updated,
     };
   });
 }
@@ -602,6 +793,14 @@ function sanitizeProfileForFirestore(uid: string, player: PlayerProfile) {
     maxExp: Math.max(100, Math.min(10000000, Math.round(player.maxExp || 100))),
     gold: Math.max(0, Math.min(10000000, Math.round(player.gold || 0))),
     streak: Math.max(0, Math.min(100000, Math.round(player.streak || 0))),
+    taskStreak: Math.max(0, Math.min(100000, Math.round(player.taskStreak || 0))),
+    workoutStreak: Math.max(0, Math.min(100000, Math.round(player.workoutStreak || 0))),
+    longestStreak: Math.max(0, Math.min(100000, Math.round(player.longestStreak || player.streak || 0))),
+    longestTaskStreak: Math.max(0, Math.min(100000, Math.round(player.longestTaskStreak || player.taskStreak || 0))),
+    longestWorkoutStreak: Math.max(0, Math.min(100000, Math.round(player.longestWorkoutStreak || player.workoutStreak || 0))),
+    lastActiveStreakDate: (player.lastActiveStreakDate || '').slice(0, 10),
+    lastTaskStreakDate: (player.lastTaskStreakDate || '').slice(0, 10),
+    lastWorkoutStreakDate: (player.lastWorkoutStreakDate || '').slice(0, 10),
     coreCharge: Math.max(0, Math.min(4, Math.round(player.coreCharge || 0))),
     sleepCondition: player.sleepCondition || 'moderate',
     nutritionCondition: player.nutritionCondition || 'balanced',
@@ -753,4 +952,217 @@ export async function saveJournalEntry(uid: string, entry: JournalEntry): Promis
   if (!firestoreDb) throw new Error('Firestore unavailable');
   const { id, ...data } = entry;
   await setDoc(doc(firestoreDb, 'users', uid, 'journal', id), data);
+}
+
+// =========================================================================
+// COIN TRANSACTIONS, CALENDAR RECORDS & ADMIN DEEP PARTICIPANT INSPECTOR
+// =========================================================================
+export async function recordCoinTransaction(
+  uid: string,
+  payload: {
+    type: CoinTransactionType;
+    source: CoinTransactionSource;
+    amount: number;
+    balanceAfter: number;
+    note: string;
+    partnerRef?: string;
+    actorUid: string;
+    actorEmail: string;
+  }
+): Promise<void> {
+  if (!firestoreDb) return;
+  const amount = Math.round(payload.amount);
+  if (amount === 0) return;
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  await setDoc(doc(firestoreDb, 'users', uid, 'coinTransactions', id), {
+    ownerUid: uid,
+    type: payload.type,
+    source: payload.source,
+    amount: Math.max(-1000000, Math.min(1000000, amount)),
+    balanceAfter: Math.max(0, Math.min(10000000, Math.round(payload.balanceAfter))),
+    note: payload.note.trim().slice(0, 240),
+    partnerRef: (payload.partnerRef || '').trim().slice(0, 120),
+    actorUid: payload.actorUid.slice(0, 128),
+    actorEmail: payload.actorEmail.slice(0, 254),
+    createdAt: Date.now(),
+  });
+}
+
+export async function fetchCoinTransactions(
+  uid: string,
+  maxCount = 80
+): Promise<CoinTransactionRecord[]> {
+  if (!firestoreDb) return [];
+  const q = query(
+    collection(firestoreDb, 'users', uid, 'coinTransactions'),
+    orderBy('createdAt', 'desc'),
+    limit(maxCount)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      ownerUid: String(data.ownerUid || uid),
+      type: (['earn', 'redeem', 'admin_adjust', 'partner_tx'].includes(String(data.type))
+        ? data.type
+        : 'earn') as CoinTransactionType,
+      source: String(data.source || 'admin') as CoinTransactionSource,
+      amount: Number(data.amount) || 0,
+      balanceAfter: Math.max(0, Number(data.balanceAfter) || 0),
+      note: String(data.note || ''),
+      partnerRef: String(data.partnerRef || ''),
+      actorUid: String(data.actorUid || ''),
+      actorEmail: String(data.actorEmail || ''),
+      createdAt: Number(data.createdAt) || 0,
+    };
+  });
+}
+
+export async function adjustParticipantCoinsByAdmin(
+  adminUser: User,
+  targetUid: string,
+  options: {
+    mode: 'add' | 'deduct' | 'set';
+    value: number;
+    txType: 'admin_adjust' | 'partner_tx';
+    note: string;
+    partnerRef?: string;
+  }
+): Promise<{ previousBalance: number; nextBalance: number; delta: number }> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  const db = firestoreDb;
+  const cleanVal = Math.max(0, Math.min(10000000, Math.round(options.value)));
+  const profileRef = doc(db, 'users', targetUid, 'profile', 'main');
+  const userRef = doc(db, 'users', targetUid);
+
+  return runTransaction(db, async (tx) => {
+    const [profSnap, userSnap] = await Promise.all([tx.get(profileRef), tx.get(userRef)]);
+    if (!profSnap.exists()) {
+      throw new Error('Peserta ini belum membuat profil permainan.');
+    }
+    const currentGold = Math.max(0, Math.round(Number(profSnap.data().gold) || 0));
+    let nextBalance = currentGold;
+    if (options.mode === 'add') nextBalance = Math.min(10000000, currentGold + cleanVal);
+    else if (options.mode === 'deduct') nextBalance = Math.max(0, currentGold - cleanVal);
+    else nextBalance = cleanVal;
+
+    const delta = nextBalance - currentGold;
+    if (delta === 0) {
+      throw new Error('Saldo koin tidak berubah (selisih 0).');
+    }
+
+    tx.update(profileRef, {
+      gold: nextBalance,
+      updatedAt: serverTimestamp(),
+    });
+
+    if (userSnap.exists()) {
+      const existingTelemetry = parseUserTelemetry(userSnap.data().telemetry);
+      if (existingTelemetry) {
+        tx.update(userRef, {
+          telemetry: sanitizeTelemetryForFirestore({
+            ...existingTelemetry,
+            gold: nextBalance,
+            updatedAt: Date.now(),
+          }),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
+    const txId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    tx.set(doc(db, 'users', targetUid, 'coinTransactions', txId), {
+      ownerUid: targetUid,
+      type: options.txType,
+      source: options.txType === 'partner_tx' ? 'partner' : 'admin',
+      amount: delta,
+      balanceAfter: nextBalance,
+      note: (options.note.trim() || 'Penyesuaian saldo koin oleh Admin').slice(0, 240),
+      partnerRef: (options.partnerRef || '').trim().slice(0, 120),
+      actorUid: adminUser.uid.slice(0, 128),
+      actorEmail: (adminUser.email || '').slice(0, 254),
+      createdAt: Date.now(),
+    });
+
+    return { previousBalance: currentGold, nextBalance, delta };
+  });
+}
+
+export async function saveCalendarSummaryToCloud(
+  uid: string,
+  source: 'google_oauth' | 'ics' | 'none',
+  events: SyncedCalendarEventItem[]
+): Promise<void> {
+  if (!firestoreDb) return;
+  const trimmed = events.slice(0, 50).map((e) => ({
+    id: String(e.id || '').slice(0, 120),
+    title: String(e.title || '').slice(0, 120),
+    start: String(e.start || '').slice(0, 40),
+    end: String(e.end || '').slice(0, 40),
+    allDay: Boolean(e.allDay),
+  }));
+  await setDoc(doc(firestoreDb, 'users', uid, 'calendar', 'latest'), {
+    ownerUid: uid,
+    source,
+    syncedAt: Date.now(),
+    eventCount: trimmed.length,
+    events: trimmed,
+  });
+}
+
+export async function fetchCalendarSummaryFromCloud(
+  uid: string
+): Promise<SyncedCalendarRecord | null> {
+  if (!firestoreDb) return null;
+  const snap = await getDoc(doc(firestoreDb, 'users', uid, 'calendar', 'latest'));
+  if (!snap.exists()) return null;
+  const d = snap.data();
+  return {
+    ownerUid: String(d.ownerUid || uid),
+    source: d.source === 'google_oauth' || d.source === 'ics' ? d.source : 'none',
+    syncedAt: Number(d.syncedAt) || 0,
+    eventCount: Number(d.eventCount) || 0,
+    events: Array.isArray(d.events) ? (d.events as SyncedCalendarEventItem[]) : [],
+  };
+}
+
+export interface ParticipantFullRecord {
+  profile: PlayerProfile | null;
+  journal: JournalEntry[];
+  dailyLogs: DailyLogEntry[];
+  coinTransactions: CoinTransactionRecord[];
+  calendar: SyncedCalendarRecord | null;
+}
+
+export async function fetchParticipantFullRecord(
+  uid: string,
+  lang: Language
+): Promise<ParticipantFullRecord> {
+  if (!firestoreDb) {
+    return { profile: null, journal: [], dailyLogs: [], coinTransactions: [], calendar: null };
+  }
+  const db = firestoreDb;
+  const [profileSnap, journalSnap, dailyLogs, coinTransactions, calendar] = await Promise.all([
+    getDoc(doc(db, 'users', uid, 'profile', 'main')).catch(() => null),
+    getDocs(
+      query(collection(db, 'users', uid, 'journal'), orderBy('dateKey', 'desc'), limit(360))
+    ).catch(() => null),
+    fetchRecentDailyLogs(uid, 60).catch(() => []),
+    fetchCoinTransactions(uid, 100).catch(() => []),
+    fetchCalendarSummaryFromCloud(uid).catch(() => null),
+  ]);
+
+  const profile =
+    profileSnap && profileSnap.exists()
+      ? normalizePlayerProfile(profileSnap.data() as Partial<PlayerProfile>, lang)
+      : null;
+
+  const journal: JournalEntry[] = journalSnap
+    ? journalSnap.docs
+        .map((d) => ({ ...d.data(), id: d.id }) as JournalEntry)
+        .sort((a, b) => b.dateKey.localeCompare(a.dateKey) || b.updatedAt - a.updatedAt)
+    : [];
+
+  return { profile, journal, dailyLogs, coinTransactions, calendar };
 }

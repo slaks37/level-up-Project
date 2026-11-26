@@ -60,8 +60,18 @@ export function requestGoogleToken(scope: string): Promise<string> {
       include_granted_scopes: false,
       callback: (result) => {
         if (result.error || !result.access_token) reject(new Error('GOOGLE_CONSENT_REQUIRED'));
-        else if (scope === CALENDAR_SCOPE && !result.scope?.split(' ').includes(CALENDAR_SCOPE)) reject(new Error('GOOGLE_CALENDAR_SCOPE_REQUIRED'));
-        else resolve(result.access_token);
+        else if (
+          scope === CALENDAR_SCOPE &&
+          !result.scope?.split(' ').some((granted) =>
+            granted === CALENDAR_SCOPE ||
+            granted === 'https://www.googleapis.com/auth/calendar.events.readonly' ||
+            granted === 'https://www.googleapis.com/auth/calendar.readonly'
+          )
+        ) {
+          reject(new Error('GOOGLE_CALENDAR_SCOPE_REQUIRED'));
+        } else {
+          resolve(result.access_token);
+        }
       },
       error_callback: () => reject(new Error('GOOGLE_POPUP_CLOSED')),
     }).requestAccessToken({ prompt: 'select_account' });
@@ -106,11 +116,13 @@ export async function fetchCalendarEvents(token: string, now = new Date()): Prom
   });
 }
 
-export function connectCalendar() {
+export async function connectCalendar(): Promise<string> {
+  await prepareGoogleOAuth();
   return requestGoogleToken(CALENDAR_SCOPE);
 }
 
-export const calendarOAuthEnabled = import.meta.env.VITE_CALENDAR_OAUTH_ENABLED === 'true';
+export const calendarOAuthEnabled =
+  Boolean(CLIENT_ID) && import.meta.env.VITE_CALENDAR_OAUTH_ENABLED !== 'false';
 
 export async function importCalendarFile(file: File): Promise<CalendarEvent[]> {
   if (file.size > 3 * 1024 * 1024) throw new Error('Calendar file too large');

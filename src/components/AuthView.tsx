@@ -75,6 +75,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [resetSentTo, setResetSentTo] = useState('');
   const [adminGoogleReady, setAdminGoogleReady] = useState(false);
   useEffect(() => {
     if (!adminOnly) return;
@@ -125,13 +126,14 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
         );
       } else {
         await sendPasswordReset(email);
+        const sentEmail = email.trim();
+        setResetSentTo(sentEmail);
         onNotify(
           lang === 'id'
-            ? `Link reset password telah dikirim ke ${email}.`
-            : `Password reset link sent to ${email}.`,
+            ? `Link reset password telah dikirim ke ${sentEmail}. Cek inbox atau folder Spam.`
+            : `Password reset link sent to ${sentEmail}. Check your inbox or Spam folder.`,
           'success'
         );
-        setMode('login');
       }
     } catch (err) {
       onNotify(translateAuthError(err, lang), 'error');
@@ -194,7 +196,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
           <div className={`grid ${adminOnly ? 'grid-cols-2' : 'grid-cols-3'} gap-1 bg-slate-100 p-1 rounded border border-slate-200 font-hud font-bold text-xs`}>
             <button
               type="button"
-              onClick={() => setMode('login')}
+              onClick={() => { setMode('login'); setResetSentTo(''); }}
               className={`py-1.5 rounded transition ${
                 mode === 'login' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
               }`}
@@ -204,7 +206,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
             {!adminOnly && (
               <button
                 type="button"
-                onClick={() => setMode('register')}
+                onClick={() => { setMode('register'); setResetSentTo(''); }}
                 className={`py-1.5 rounded transition ${
                   mode === 'register'
                     ? 'bg-slate-900 text-white'
@@ -216,12 +218,12 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
             )}
             <button
               type="button"
-              onClick={() => setMode('reset')}
+              onClick={() => { setMode('reset'); setResetSentTo(''); }}
               className={`py-1.5 rounded transition ${
                 mode === 'reset' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              {lang === 'id' ? 'RESET' : 'RESET'}
+              {lang === 'id' ? 'LUPA PASSWORD' : 'FORGOT'}
             </button>
           </div>
 
@@ -258,9 +260,40 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
               </div>
             </div>
 
+            {mode === 'reset' && (
+              <div className="p-3 rounded bg-sky-50 border border-sky-200 text-xs text-sky-900 space-y-1">
+                <p className="font-bold">
+                  {lang === 'id' ? 'Lupa Password?' : 'Forgot your password?'}
+                </p>
+                <p className="text-sky-800">
+                  {lang === 'id'
+                    ? 'Masukkan email akunmu di bawah. Kami akan mengirimkan tautan untuk membuat password baru.'
+                    : 'Enter your account email below and we will send a password reset link.'}
+                </p>
+                {resetSentTo && (
+                  <p className="rounded bg-emerald-100 border border-emerald-300 px-2 py-1.5 text-emerald-900 font-semibold">
+                    ✓ {lang === 'id'
+                      ? `Tautan reset dikirim ke ${resetSentTo}. Periksa inbox atau folder Spam.`
+                      : `Reset link sent to ${resetSentTo}. Check your inbox or Spam folder.`}
+                  </p>
+                )}
+              </div>
+            )}
+
             {mode !== 'reset' && (
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Password</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-700">Password</label>
+                  {mode === 'login' && (
+                    <button
+                      type="button"
+                      onClick={() => { setMode('reset'); setResetSentTo(''); }}
+                      className="text-[11px] font-semibold text-sky-700 hover:text-sky-900 hover:underline"
+                    >
+                      {lang === 'id' ? 'Lupa password?' : 'Forgot password?'}
+                    </button>
+                  )}
+                </div>
                 <div className="relative">
                   <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                   <input
@@ -330,6 +363,15 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
                       : 'SEND PASSWORD RESET LINK'}
               </span>
             </button>
+            {mode === 'reset' && (
+              <button
+                type="button"
+                onClick={() => { setMode('login'); setResetSentTo(''); }}
+                className="w-full text-center text-xs font-semibold text-sky-700 hover:underline"
+              >
+                {lang === 'id' ? '← Kembali ke Masuk' : '← Back to Sign In'}
+              </button>
+            )}
           </form>
 
           <div className="relative flex items-center">

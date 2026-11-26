@@ -5,7 +5,9 @@ import {
   CheckSquare,
   Clock,
   Compass,
+  Dumbbell,
   Edit3,
+  Flame,
   Gift,
   Loader2,
   Plus,
@@ -16,6 +18,8 @@ import {
   Trash2,
 } from 'lucide-react';
 import type {
+  CoinEconomyConfig,
+  CoinTransactionRecord,
   GrowthNewsItem,
   DreamStep,
   Language,
@@ -24,7 +28,7 @@ import type {
   QuestFilter,
 } from '../types';
 import { tr } from '../data/i18n';
-import { getActiveStage } from '../engine/science';
+import { DEFAULT_COIN_ECONOMY, getActiveStage, getEffectiveStreak, getTodayDateKey } from '../engine/science';
 import { getCurrentDreamSteps, getRoadmapActions, type DailyTaskSuggestion } from '../engine/coaching';
 import { PromoNewsPanel } from './PromoNewsPanel';
 
@@ -34,9 +38,18 @@ import { PromoNewsPanel } from './PromoNewsPanel';
 export const StatusPanel: React.FC<{
   player: PlayerProfile;
   lang: Language;
-}> = ({ player, lang }) => {
+  coinConfig?: CoinEconomyConfig;
+}> = ({ player, lang, coinConfig = DEFAULT_COIN_ECONOMY }) => {
   const activeStage = getActiveStage(player);
   const expPct = Math.min(100, Math.round((player.exp / Math.max(1, player.maxExp)) * 100));
+  const today = getTodayDateKey();
+  const dailyStreak = getEffectiveStreak(player.streak, player.lastActiveStreakDate, today);
+  const taskStreak = getEffectiveStreak(player.taskStreak, player.lastTaskStreakDate, today);
+  const workoutStreak = getEffectiveStreak(player.workoutStreak, player.lastWorkoutStreakDate, today);
+  const doneTodayOverall = player.lastActiveStreakDate === today;
+  const doneTodayTask = player.lastTaskStreakDate === today;
+  const doneTodayWorkout = player.lastWorkoutStreakDate === today;
+  const estimatedIdr = coinConfig.idrPerCoin > 0 ? Math.round(player.gold * coinConfig.idrPerCoin) : 0;
 
   const abilities = [
     {
@@ -120,14 +133,57 @@ export const StatusPanel: React.FC<{
           </div>
 
           <div className="grid grid-cols-2 gap-2 mt-3">
-            <div className="p-2 rounded bg-amber-50 border border-amber-200 flex items-center justify-between">
-              <span className="text-[11px] font-bold text-amber-900">{tr(lang, 'lblCredits')}</span>
-              <span className="font-mono font-bold text-xs text-amber-700">{player.gold} CR</span>
+            <div className="p-2 rounded bg-amber-50 border border-amber-200">
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[10px] font-bold text-amber-900 uppercase truncate">
+                  {coinConfig.coinName || tr(lang, 'lblCredits')}
+                </span>
+                <span className="font-mono font-bold text-xs text-amber-800 shrink-0">
+                  {player.gold} {coinConfig.coinSymbol}
+                </span>
+              </div>
+              {estimatedIdr > 0 && (
+                <p className="font-mono text-[10px] text-amber-700 mt-0.5">
+                  ≈ Rp {estimatedIdr.toLocaleString('id-ID')}
+                  {coinConfig.partnerName ? ` · ${coinConfig.partnerName}` : ''}
+                </p>
+              )}
             </div>
-            <div className="p-2 rounded bg-orange-50 border border-orange-200 flex items-center justify-between">
-              <span className="text-[11px] font-bold text-orange-900">{tr(lang, 'lblStreak')}</span>
-              <span className="font-mono font-bold text-xs text-orange-700">
-                {player.streak} {lang === 'id' ? 'HARI' : 'DAYS'}
+            <div className="p-2 rounded bg-orange-50 border border-orange-200">
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[10px] font-bold text-orange-900 flex items-center gap-1">
+                  <Flame className="w-3 h-3 text-orange-600" />
+                  {tr(lang, 'lblStreak')}
+                </span>
+                <span className="font-mono font-bold text-xs text-orange-700">
+                  {dailyStreak} {lang === 'id' ? 'HARI' : 'DAYS'}
+                </span>
+              </div>
+              <p className="text-[10px] text-orange-800 mt-0.5">
+                {doneTodayOverall
+                  ? (lang === 'id' ? '✓ Aktif hari ini' : '✓ Active today')
+                  : (lang === 'id' ? 'Selesaikan tugas/workout' : 'Complete a task/workout')}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            <div className="px-2 py-1.5 rounded bg-sky-50 border border-sky-200 flex items-center justify-between gap-1 text-[10px]">
+              <span className="font-bold text-sky-900 flex items-center gap-1 truncate">
+                <CheckSquare className="w-3 h-3 text-sky-600 shrink-0" />
+                {lang === 'id' ? 'Streak Tugas' : 'Task Streak'}
+              </span>
+              <span className="font-mono font-bold text-sky-800 shrink-0">
+                🔥 {taskStreak}{doneTodayTask ? ' ✓' : ''}
+              </span>
+            </div>
+            <div className="px-2 py-1.5 rounded bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-1 text-[10px]">
+              <span className="font-bold text-emerald-900 flex items-center gap-1 truncate">
+                <Dumbbell className="w-3 h-3 text-emerald-600 shrink-0" />
+                {lang === 'id' ? 'Streak Workout' : 'Workout Streak'}
+              </span>
+              <span className="font-mono font-bold text-emerald-800 shrink-0">
+                🔥 {workoutStreak}{doneTodayWorkout ? ' ✓' : ''}
               </span>
             </div>
           </div>
@@ -212,7 +268,7 @@ export const DreamRoadmapPanel: React.FC<{
 
   return (
     <div className="anime-panel overflow-hidden flex flex-col justify-between h-full">
-      <div className="blender-bar px-3.5 py-1.5 flex items-center justify-between gap-2">
+      <div className="blender-bar px-3.5 py-1.5 flex flex-wrap items-center justify-between gap-2">
         <span className="font-mono text-[10px] font-bold text-orange-700 flex items-center gap-1.5 truncate">
           <Compass className="w-3.5 h-3.5 flex-shrink-0" />
           <span className="truncate">{tr(lang, 'dreamPanelTitle')}</span>
@@ -427,6 +483,7 @@ export const DailyTasksPanel: React.FC<{
   player: PlayerProfile;
   lang: Language;
   filter: QuestFilter;
+  coinConfig?: CoinEconomyConfig;
   focus: { note: string; pendingNote: string; suggestions: DailyTaskSuggestion[] } | null;
   onAddSuggestion: (task: DailyTaskSuggestion) => void;
   onChangeFilter: (f: QuestFilter) => void;
@@ -438,6 +495,7 @@ export const DailyTasksPanel: React.FC<{
   player,
   lang,
   filter,
+  coinConfig = DEFAULT_COIN_ECONOMY,
   focus,
   onAddSuggestion,
   onChangeFilter,
@@ -446,6 +504,8 @@ export const DailyTasksPanel: React.FC<{
   onOpenAddQuest,
   onOpenCompleteDay,
 }) => {
+  const taskStreak = getEffectiveStreak(player.taskStreak, player.lastTaskStreakDate);
+  const workoutStreak = getEffectiveStreak(player.workoutStreak, player.lastWorkoutStreakDate);
   const bd = player.dailyBreakdown;
   const log = player.dailyDurationLog;
   const doneTotal = (log.study || 0) + (log.work || 0) + (log.fitness || 0);
@@ -473,12 +533,19 @@ export const DailyTasksPanel: React.FC<{
 
   return (
     <div className="anime-panel overflow-hidden flex flex-col justify-between h-full">
-      <div className="blender-bar px-3.5 py-1.5 flex items-center justify-between gap-2">
+      <div className="blender-bar px-3.5 py-1.5 flex flex-wrap items-center justify-between gap-2">
         <span className="font-mono text-[10px] font-bold text-sky-800 flex items-center gap-1.5 truncate">
           <CheckSquare className="w-3.5 h-3.5 flex-shrink-0" />
           <span className="truncate">{tr(lang, 'questBoardTitle')}</span>
         </span>
-
+        <div className="flex items-center gap-1.5 font-mono text-[9px] font-bold">
+          <span className="rounded bg-sky-100 px-1.5 py-0.5 text-sky-800">
+            🔥 {lang === 'id' ? 'Tugas' : 'Task'} {taskStreak}h
+          </span>
+          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">
+            💪 {workoutStreak}h
+          </span>
+        </div>
       </div>
 
       <div className="p-4 flex-grow flex flex-col justify-between">
@@ -629,7 +696,7 @@ export const DailyTasksPanel: React.FC<{
                       </span>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         <span className="font-mono text-[9px] font-bold text-amber-700">
-                          +{q.exp} EXP
+                          +{q.category === 'FITNESS' ? coinConfig.pointPerWorkout : coinConfig.pointPerTask} {coinConfig.coinSymbol}
                         </span>
                         <button
                           type="button"
@@ -801,32 +868,89 @@ export const SkillArsenalPanel: React.FC<{
 // =========================================================================
 // 6. ROW 3: REWARD EXCHANGE + GROWTH NEWS & OPPORTUNITIES
 // =========================================================================
-export function RewardsAndGrowth({ player, lang, actions, onBuyReward, onAddReward, onAddAction }: {
+export function RewardsAndGrowth({
+  player,
+  lang,
+  actions,
+  coinConfig = DEFAULT_COIN_ECONOMY,
+  recentTransactions = [],
+  onBuyReward,
+  onAddReward,
+  onAddAction,
+}: {
   player: PlayerProfile;
   lang: Language;
   actions: GrowthNewsItem[];
+  coinConfig?: CoinEconomyConfig;
+  recentTransactions?: CoinTransactionRecord[];
   onBuyReward: (id: string) => void;
   onAddReward: () => void;
   onAddAction: (item: GrowthNewsItem) => void;
 }) {
   const id = lang === 'id';
+  const symbol = coinConfig.coinSymbol || 'KOIN';
+  const estimatedIdr = coinConfig.idrPerCoin > 0 ? Math.round(player.gold * coinConfig.idrPerCoin) : 0;
   return (
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
       <section className="anime-panel overflow-hidden">
         <div className="blender-bar flex items-center justify-between gap-2 px-3 py-2">
-          <h2 className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-amber-800"><Gift className="size-3.5" /> {id ? 'HADIAH DIRI' : 'SELF REWARDS'}</h2>
+          <h2 className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-amber-800">
+            <Gift className="size-3.5" /> {coinConfig.coinName?.toUpperCase() || (id ? 'HADIAH DIRI' : 'SELF REWARDS')}
+          </h2>
           <button type="button" onClick={onAddReward} className="rounded border border-amber-300 px-2 py-1 text-[10px] font-bold text-amber-900">{tr(lang, 'btnAddReward')}</button>
         </div>
         <div className="grid gap-2 p-4">
+          <div className="rounded border border-amber-200 bg-amber-50 p-2.5 text-xs space-y-1">
+            <div className="flex items-center justify-between font-bold text-amber-950">
+              <span>{id ? 'Saldo saat ini' : 'Current balance'}</span>
+              <span className="font-mono text-amber-800">{player.gold} {symbol}</span>
+            </div>
+            {estimatedIdr > 0 && (
+              <p className="text-[11px] text-amber-800">
+                {id ? 'Estimasi nilai' : 'Estimated value'}: <strong>Rp {estimatedIdr.toLocaleString('id-ID')}</strong> ({coinConfig.idrPerCoin.toLocaleString('id-ID')} IDR / {symbol})
+              </p>
+            )}
+            {coinConfig.partnerName && (
+              <p className="text-[11px] text-amber-900">
+                {coinConfig.partnerEnabled
+                  ? (id
+                      ? `Transaksi ${coinConfig.partnerName} aktif (min. ${coinConfig.minRedeemCoins} ${symbol}).`
+                      : `${coinConfig.partnerName} transactions active (min. ${coinConfig.minRedeemCoins} ${symbol}).`)
+                  : (id
+                      ? `Siap dihubungkan dengan ${coinConfig.partnerName} untuk transaksi hadiah.`
+                      : `Ready to connect with ${coinConfig.partnerName} for reward transactions.`)}
+              </p>
+            )}
+            {coinConfig.transactionNote && (
+              <p className="text-[11px] text-slate-700">{coinConfig.transactionNote}</p>
+            )}
+          </div>
           {player.rewards.map((reward) => (
             <article key={reward.id} className="space-y-1.5 rounded border border-slate-200 bg-slate-50 p-2.5">
-              <div className="flex items-start justify-between gap-2 text-xs"><h3 className="font-bold">{reward.name}</h3><span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 font-mono text-amber-900">{reward.cost} CR</span></div>
+              <div className="flex items-start justify-between gap-2 text-xs"><h3 className="font-bold">{reward.name}</h3><span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 font-mono text-amber-900">{reward.cost} {symbol}</span></div>
               <p className="text-[11px] text-slate-600">{reward.desc}</p>
               <button type="button" onClick={() => onBuyReward(reward.id)}
                 className="rounded bg-amber-700 px-2 py-1 text-xs font-bold text-white disabled:bg-slate-200 disabled:text-slate-600"
                 disabled={player.gold < reward.cost}>{id ? 'Tukar hadiah' : 'Redeem reward'}</button>
             </article>
           ))}
+          {recentTransactions.length > 0 && (
+            <details className="rounded border border-slate-200 bg-white p-2 text-xs">
+              <summary className="cursor-pointer font-bold text-slate-800">
+                {id ? `Riwayat koin terakhir (${recentTransactions.length})` : `Recent coin history (${recentTransactions.length})`}
+              </summary>
+              <ul className="mt-2 space-y-1 max-h-36 overflow-y-auto">
+                {recentTransactions.slice(0, 10).map((tx) => (
+                  <li key={tx.id} className="flex items-center justify-between gap-2 border-t border-slate-100 pt-1 text-[11px]">
+                    <span className="truncate text-slate-700">{tx.note || tx.source}</span>
+                    <span className={`shrink-0 font-mono font-bold ${tx.amount >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                      {tx.amount >= 0 ? `+${tx.amount}` : tx.amount} {symbol}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       </section>
       <PromoNewsPanel lang={lang} />

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Briefcase, CalendarDays, Dumbbell, UserRound } from 'lucide-react';
-import type { CareerProfile, GymProfile, Language, PlayerProfile, Quest } from '../types';
+import { Briefcase, CalendarDays, Dumbbell, Flame, UserRound } from 'lucide-react';
+import type { CareerProfile, CoinEconomyConfig, GymProfile, Language, PlayerProfile, Quest } from '../types';
 import type { DailyEvidence, JournalEntry, LoggedActivity } from '../engine/journal';
 import { defaultCareer, defaultGym, getCareerActions, newWorkoutQuest, workoutPlan } from '../engine/coaching';
+import { DEFAULT_COIN_ECONOMY, getEffectiveStreak } from '../engine/science';
 import { calendarOAuthEnabled, importCalendarFile, connectCalendar, fetchCalendarEvents, prepareGoogleOAuth, revokeCalendarToken, type CalendarEvent } from '../services/googleCalendar';
 import { ModalShell } from './Modals';
 
@@ -106,12 +107,15 @@ export function CoachSetupModal({ section, player, lang, onSave, onClose }: {
   </ModalShell>;
 }
 
-function CalendarPanel({ owner, lang, onTask, onAgenda }: {
-  owner: string; lang: Language; onTask: (title: string) => void; onAgenda: (owner: string, events: CalendarEvent[]) => void;
+function CalendarPanel({ owner, lang, onTask, onAgenda, onCalendarSynced }: {
+  owner: string;
+  lang: Language;
+  onTask: (title: string) => void;
+  onAgenda: (owner: string, events: CalendarEvent[]) => void;
+  onCalendarSynced?: (source: 'google_oauth' | 'ics' | 'none', events: CalendarEvent[]) => void;
 }) {
   const id = lang === 'id';
   const activeToken = useRef('');
-  const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
   const cacheKey = 'levelup_calendar_import:' + owner;
@@ -133,18 +137,15 @@ function CalendarPanel({ owner, lang, onTask, onAgenda }: {
 
   useEffect(() => {
     if (!calendarOAuthEnabled) return;
-    let mounted = true;
-    void prepareGoogleOAuth().then(() => { if (mounted) setReady(true); }).catch(() => {
-      if (mounted) setError(id ? 'Koneksi Google Calendar belum tersedia.' : 'Google Calendar connection is unavailable.');
-    });
-    return () => { mounted = false; };
-  }, [id]);
+    void prepareGoogleOAuth().catch(() => {});
+  }, []);
   const refresh = async (token: string) => {
     const result = await fetchCalendarEvents(token);
     if (activeToken.current !== token) return;
     setEvents(result);
     setImported(false);
     setConnected(true);
+    onCalendarSynced?.('google_oauth', result);
   };
   const authorize = async () => {
     setBusy(true);
@@ -153,11 +154,21 @@ function CalendarPanel({ owner, lang, onTask, onAgenda }: {
       const token = activeToken.current || await connectCalendar();
       activeToken.current = token;
       await refresh(token);
-    } catch {
+    } catch (err) {
       activeToken.current = '';
       setConnected(false);
-      setEvents([]);
-      setError(id ? 'Agenda belum bisa dibaca. Periksa izin akun Google, lalu coba hubungkan lagi.' : 'Could not read your agenda. Check your Google consent and reconnect.');
+      const code = err instanceof Error ? err.message : '';
+      if (code === 'GOOGLE_POPUP_CLOSED') {
+        setError(id ? 'Jendela login Google ditutup sebelum selesai. Klik Hubungkan Google Calendar untuk mencoba lagi.' : 'Google sign-in popup closed. Click Connect Google Calendar to try again.');
+      } else if (code === 'GOOGLE_CALENDAR_SCOPE_REQUIRED') {
+        setError(id ? 'Centang izin baca Google Calendar pada layar persetujuan Google, lalu hubungkan lagi.' : 'Please allow Google Calendar read permission on the consent screen and reconnect.');
+      } else if (code === 'GOOGLE_OAUTH_UNCONFIGURED') {
+        setError(id ? 'Client ID Google OAuth belum dikonfigurasi pada aplikasi.' : 'Google OAuth Client ID is not configured.');
+      } else if (code === 'GOOGLE_SESSION_EXPIRED') {
+        setError(id ? 'Sesi Google Calendar berakhir. Klik Hubungkan ulang.' : 'Google Calendar session expired. Please reconnect.');
+      } else {
+        setError(id ? 'Agenda belum bisa dibaca. Pastikan pop-up diizinkan dan izin Google Calendar disetujui, lalu coba hubungkan lagi.' : 'Could not read your agenda. Ensure popups are allowed and Google consent is granted, then reconnect.');
+      }
     } finally { setBusy(false); }
   };
   useEffect(() => {
@@ -179,10 +190,26 @@ function CalendarPanel({ owner, lang, onTask, onAgenda }: {
   const last = events.filter((event) => !event.allDay && endTime(event) < now && endTime(event) >= now - 7 * 86400000).at(-1);
   const displayDate = (event: CalendarEvent) => event.allDay ? event.start : new Date(event.start).toLocaleString(id ? 'id-ID' : 'en-GB', { dateStyle:'medium', timeStyle:'short' });
   return <div className="space-y-2 rounded border border-slate-200 bg-slate-50 p-3 text-xs">
-    <p className="flex items-center gap-1 font-bold"><CalendarDays className="size-4 text-sky-700" /> Google Calendar</p>
-    <p className="text-slate-600">{id ? 'Lihat agenda tujuh hari ke depan dan buat tugas persiapan rapat. Agenda dari file tersimpan di perangkat ini.' : 'See the next seven days and create meeting prep tasks. Imported agendas stay on this device.'}</p>
-    <div className="flex gap-2">
-      {calendarOAuthEnabled && <button type="button" className={actionButton} disabled={!ready || busy} onClick={() => void authorize()}>{connected ? (id ? 'Muat ulang agenda' : 'Refresh agenda') : (id ? 'Hubungkan Google Calendar' : 'Connect Google Calendar')}</button>}
+    <div className="flex items-center justify-between gap-2">
+      <p className="flex items-center gap-1 font-bold"><CalendarDays className="size-4 text-sky-700" /> Google Calendar</p>
+      {connected && <span className="rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-800">{id ? 'TERHUBUNG' : 'CONNECTED'}</span>}
+    </div>
+    <p className="text-slate-600">{id ? 'Hubungkan langsung ke Google Calendar untuk melihat agenda 7 hari ke depan dan membuat tugas persiapan rapat.' : 'Connect directly to Google Calendar to view the next 7 days and create meeting prep tasks.'}</p>
+    <div className="flex flex-wrap items-center gap-2">
+      {calendarOAuthEnabled && (
+        <button
+          type="button"
+          className="rounded bg-sky-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-800 disabled:opacity-50 transition"
+          disabled={busy}
+          onClick={() => void authorize()}
+        >
+          {busy
+            ? (id ? 'Menghubungkan…' : 'Connecting…')
+            : connected
+              ? (id ? 'Muat ulang agenda' : 'Refresh agenda')
+              : (id ? 'Hubungkan Google Calendar' : 'Connect Google Calendar')}
+        </button>
+      )}
       <label className={actionButton + ' cursor-pointer'}>
         {id ? 'Impor agenda .ics' : 'Import .ics agenda'}
         <input className="sr-only" type="file" accept=".ics,text/calendar" onChange={(event) => {
@@ -193,16 +220,17 @@ function CalendarPanel({ owner, lang, onTask, onAgenda }: {
           void importCalendarFile(file).then((result) => {
             activeToken.current = ''; setConnected(false); setEvents(result); setImported(true);
             try { localStorage.setItem(cacheKey, JSON.stringify(result)); } catch { /* Keep the in-session import. */ }
+            onCalendarSynced?.('ics', result);
           }).catch(() => setError(id ? 'File kalender belum bisa dibuka. Pilih file .ics dari hasil ekspor.' : 'Calendar file could not be read. Choose an exported .ics file.'));
         }} />
       </label>
-      {imported && <button className="underline" type="button" onClick={() => { setImported(false); setEvents([]); try { localStorage.removeItem(cacheKey); } catch { /* Storage unavailable. */ } }}>{id ? 'Bersihkan agenda' : 'Clear agenda'}</button>}
+      {imported && <button className="underline" type="button" onClick={() => { setImported(false); setEvents([]); try { localStorage.removeItem(cacheKey); } catch { /* Storage unavailable. */ } onCalendarSynced?.('none', []); }}>{id ? 'Bersihkan agenda' : 'Clear agenda'}</button>}
       {connected && <button type="button" className="underline" onClick={() => {
         if (activeToken.current) revokeCalendarToken(activeToken.current);
         activeToken.current = ''; setConnected(false); setEvents([]); setError('');
+        onCalendarSynced?.('none', []);
       }}>{id ? 'Putuskan' : 'Disconnect'}</button>}
     </div>
-    {!calendarOAuthEnabled && <p className="text-slate-600">{id ? 'Koneksi langsung menunggu verifikasi Google.' : 'Direct connection awaits Google verification.'}</p>}
     {error && <p role="status" className="text-amber-900">{error}</p>}
     {last && <div className="rounded border border-slate-200 bg-white p-2">
       <p>{id ? 'Agenda terakhir' : 'Last event'} · <strong>{last.title || (id ? 'Tanpa judul' : 'Untitled')}</strong></p>
@@ -220,9 +248,10 @@ function CalendarPanel({ owner, lang, onTask, onAgenda }: {
   </div>;
 }
 
-export function CareerCoach({ owner, player, lang, records, onEdit, onAdd, onAgenda }: {
+export function CareerCoach({ owner, player, lang, records, onEdit, onAdd, onAgenda, onCalendarSynced }: {
   owner: string; player: PlayerProfile; lang: Language; records: JournalEntry[]; onEdit: () => void; onAdd: (title: string) => void;
   onAgenda: (owner: string, events: CalendarEvent[]) => void;
+  onCalendarSynced?: (source: 'google_oauth' | 'ics' | 'none', events: CalendarEvent[]) => void;
 }) {
   const id = lang === 'id';
   const work = player.career;
@@ -244,34 +273,75 @@ export function CareerCoach({ owner, player, lang, records, onEdit, onAdd, onAge
       </div>)}</div>
       {recent.length > 0 && <div><p className="font-bold">{id ? 'Pekerjaan tercatat terakhir' : 'Recent work logged'}</p>
         <ul className="list-disc space-y-1 pl-4">{recent.map((entry) => <li key={entry.id}>{entry.title} · {entry.dateKey}</li>)}</ul></div>}
-      <CalendarPanel owner={owner} lang={lang} onTask={onAdd} onAgenda={onAgenda} />
-      <a className="text-sky-800 underline" href="https://www.onetonline.org/link/details/13-1082.00" target="_blank" rel="noreferrer">{id ? 'Acuan peran dan pengelolaan proyek · O*NET' : 'Project management role reference · O*NET'}</a>
+      <CalendarPanel owner={owner} lang={lang} onTask={onAdd} onAgenda={onAgenda} onCalendarSynced={onCalendarSynced} />
     </div>
   </section>;
 }
 
-export function GymCoach({ player, lang, evidence, records, onEdit, onAdd }: {
-  player: PlayerProfile; lang: Language; evidence: DailyEvidence; records: JournalEntry[]; onEdit: () => void; onAdd: (quest: Quest) => void;
+export function GymCoach({ player, lang, evidence, records, coinConfig = DEFAULT_COIN_ECONOMY, onEdit, onAdd, onCompleteQuest }: {
+  player: PlayerProfile;
+  lang: Language;
+  evidence: DailyEvidence;
+  records: JournalEntry[];
+  coinConfig?: CoinEconomyConfig;
+  onEdit: () => void;
+  onAdd: (quest: Quest) => void;
+  onCompleteQuest?: (quest: Quest) => void;
 }) {
   const id = lang === 'id';
   const plan = workoutPlan(player, evidence, records, lang);
   const latest = records.find((entry): entry is LoggedActivity => entry.kind === 'activity' && !!entry.workout);
+  const workoutStreak = getEffectiveStreak(player.workoutStreak, player.lastWorkoutStreakDate);
+  const bestWorkoutStreak = Math.max(workoutStreak, player.longestWorkoutStreak ?? 0);
   return <section className="anime-panel overflow-hidden">
-    <div className="blender-bar flex items-center justify-between gap-2 px-3 py-2">
-      <h2 className="flex items-center gap-1.5 font-mono text-[10px] font-bold"><Dumbbell className="size-4 text-emerald-700" />{id ? 'PROGRAM LATIHAN' : 'WORKOUT PROGRAM'}</h2>
+    <div className="blender-bar flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+      <div className="flex items-center gap-2">
+        <h2 className="flex items-center gap-1.5 font-mono text-[10px] font-bold"><Dumbbell className="size-4 text-emerald-700" />{id ? 'PROGRAM LATIHAN' : 'WORKOUT PROGRAM'}</h2>
+        <span className="inline-flex items-center gap-1 rounded bg-orange-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-orange-800" title={id ? `Rekor terbaik: ${bestWorkoutStreak} hari` : `Best streak: ${bestWorkoutStreak} days`}>
+          <Flame className="size-3 text-orange-600" />
+          {workoutStreak} {id ? 'HARI' : 'D'}
+        </span>
+      </div>
       <button type="button" className={actionButton} onClick={onEdit}>{id ? 'Profil latihan' : 'Workout profile'}</button>
     </div>
     <div className="space-y-2 p-3 text-xs">
       {plan ? <>
-        <p className="font-bold">{id ? `Target ${plan.weekly} hari aktif per minggu` : `Aim for ${plan.weekly} active days per week`}</p>
-        <p className="text-slate-600">{id ? `${plan.activeDays} hari latihan tercatat minggu ini` : `${plan.activeDays} active days logged this week`}</p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="font-bold">{id ? `Target ${plan.weekly} hari aktif per minggu` : `Aim for ${plan.weekly} active days per week`}</p>
+            <p className="text-slate-600">{id ? `${plan.activeDays} hari latihan tercatat minggu ini` : `${plan.activeDays} active days logged this week`}</p>
+          </div>
+          <span className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 font-mono text-[10px] font-bold text-emerald-800">
+            +{coinConfig.pointPerWorkout} {coinConfig.coinSymbol} / {id ? 'latihan' : 'workout'}
+          </span>
+        </div>
         <p role="status" className="rounded bg-emerald-50 p-2 text-emerald-950">{plan.readinessText}</p>
-        <p className="text-slate-600">{id ? 'Sisakan hari pemulihan di antara sesi kekuatan. Catat set, repetisi, capek, dan nyeri setelah latihan.' : 'Leave recovery days between strength sessions. Log actual sets, repetitions, fatigue and pain afterward.'}</p>
+        <p className="text-slate-600">{id ? 'Sisakan hari pemulihan di antara sesi kekuatan. Catat set, repetisi, capek, dan nyeri setelah latihan — setiap sesi menjaga streak workout kamu.' : 'Leave recovery days between strength sessions. Log sets, reps, fatigue and pain afterward — every session builds your workout streak.'}</p>
         {plan.exercises.map((item) => {
-          const exists = player.quests.some((quest) => quest.category === 'FITNESS' && quest.title === item.title);
+          const existing = player.quests.find((quest) => quest.category === 'FITNESS' && quest.title === item.title);
           return <div key={item.title} className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-white p-2">
             <div><p className="font-bold">{item.title}</p><p>{item.sets ? `${item.sets} set × ${item.reps} reps` : `${item.minutes} ${id ? 'menit' : 'minutes'}`}</p></div>
-            <button type="button" className={actionButton} disabled={exists} onClick={() => onAdd(newWorkoutQuest(item))}>{exists ? (id ? 'Sudah di daftar' : 'Already listed') : (id ? 'Tambah latihan' : 'Add exercise')}</button>
+            {existing ? (
+              existing.completed ? (
+                <span className="rounded bg-emerald-100 px-2 py-1 text-[11px] font-bold text-emerald-800">
+                  {id ? '✓ Selesai' : '✓ Done'}
+                </span>
+              ) : onCompleteQuest ? (
+                <button
+                  type="button"
+                  className="rounded bg-emerald-600 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
+                  onClick={() => onCompleteQuest(existing)}
+                >
+                  {id ? 'Selesai latihan' : 'Log workout'}
+                </button>
+              ) : (
+                <span className="text-[11px] font-semibold text-slate-500">{id ? 'Sudah di daftar' : 'Already listed'}</span>
+              )
+            ) : (
+              <button type="button" className={actionButton} onClick={() => onAdd(newWorkoutQuest(item))}>
+                {id ? 'Tambah latihan' : 'Add exercise'}
+              </button>
+            )}
           </div>;
         })}
         {latest?.workout && <p className="break-words text-slate-600">{id ? 'Sesi terakhir' : 'Last session'} · {latest.title}{latest.workout.setReps ? ' · ' + latest.workout.setReps.split(',').join(' / ') + ' reps' : ''}</p>}

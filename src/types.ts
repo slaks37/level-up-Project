@@ -102,6 +102,7 @@ export interface DreamStep {
   completedMinutes: number;
   skillName: string;
   completed: boolean;
+  rewarded?: boolean;
 }
 
 export interface PermanentSkill {
@@ -180,6 +181,14 @@ export interface PlayerProfile {
   maxExp: number;
   gold: number;
   streak: number;
+  taskStreak?: number;
+  workoutStreak?: number;
+  longestStreak?: number;
+  longestTaskStreak?: number;
+  longestWorkoutStreak?: number;
+  lastActiveStreakDate?: string;
+  lastTaskStreakDate?: string;
+  lastWorkoutStreakDate?: string;
   coreCharge: number;
   sleepCondition: SleepCondition;
   nutritionCondition: NutritionCondition;
@@ -248,6 +257,98 @@ export interface AdminAISecretConfig {
   updatedBy?: string;
 }
 
+export interface CoinEconomyConfig {
+  coinName: string;
+  coinSymbol: string;
+  pointPerTask: number;
+  pointPerWorkout: number;
+  pointPerCheckIn: number;
+  pointPerMilestone: number;
+  pointPerOverdrive: number;
+  pointPerDayClear: number;
+  pointPerLevelUp: number;
+  startingCoins: number;
+  idrPerCoin: number;
+  partnerName: string;
+  partnerEnabled: boolean;
+  partnerEndpoint: string;
+  minRedeemCoins: number;
+  transactionNote: string;
+  updatedBy?: string;
+}
+
+export interface CoinPartnerSecretConfig {
+  partnerName: string;
+  merchantId: string;
+  apiEndpoint: string;
+  apiKey: string;
+  webhookSecret: string;
+  updatedBy?: string;
+}
+
+export type CoinTransactionType = 'earn' | 'redeem' | 'admin_adjust' | 'partner_tx';
+export type CoinTransactionSource =
+  | 'task'
+  | 'workout'
+  | 'checkin'
+  | 'milestone'
+  | 'overdrive'
+  | 'day_clear'
+  | 'level_up'
+  | 'self_reward'
+  | 'admin'
+  | 'partner';
+
+export interface CoinTransactionRecord {
+  id: string;
+  ownerUid: string;
+  type: CoinTransactionType;
+  source: CoinTransactionSource;
+  amount: number;
+  balanceAfter: number;
+  note: string;
+  partnerRef: string;
+  actorUid: string;
+  actorEmail: string;
+  createdAt: number;
+}
+
+export interface UserTelemetrySummary {
+  name: string;
+  profession: string;
+  goal: string;
+  level: number;
+  gold: number;
+  streak: number;
+  taskStreak: number;
+  workoutStreak: number;
+  completedTasksTotal: number;
+  completedWorkoutsTotal: number;
+  lastMood: string;
+  lastEnergy: string;
+  lastSleepHours: number | null;
+  hasPainAlert: boolean;
+  projectBlocked: boolean;
+  lastActiveDate: string;
+  updatedAt: number;
+}
+
+export interface SyncedCalendarEventItem {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+}
+
+export interface SyncedCalendarRecord {
+  ownerUid: string;
+  source: 'google_oauth' | 'ics' | 'none';
+  syncedAt: number;
+  eventCount: number;
+  events: SyncedCalendarEventItem[];
+}
+
 export interface UserAccountRecord {
   ownerUid: string;
   displayName: string;
@@ -258,6 +359,7 @@ export interface UserAccountRecord {
   aiRequestsToday: number;
   aiTotalRequests: number;
   aiQuotaDate: string;
+  telemetry?: UserTelemetrySummary;
   createdAt?: string;
   updatedAt?: string;
 }
