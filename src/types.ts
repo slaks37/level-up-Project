@@ -7,7 +7,6 @@ export type QuestFilter = 'ALL' | QuestCategory;
 export type QuestUnitType = 'MINUTES' | 'REPS';
 export type ProfessionCategory = 'AGRI' | 'BIZ' | 'TECH' | 'EDU';
 export type MobileTab = 'status' | 'tasks' | 'dream' | 'skills' | 'perks';
-export type CoreShadingMode = 'hybrid' | 'wire' | 'solid';
 
 export interface Biometrics {
   bmi: number;

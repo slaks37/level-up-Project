@@ -13,7 +13,7 @@ export default defineConfig({
       manifest: {
         name: 'LEVEL UP SYSTEM — Bio-Tactical & Career OS',
         short_name: 'Level Up OS',
-        description: 'Science-based career, study & fitness leveling app with AI Coach, 3D Aether Core, and real-time cloud sync.',
+        description: 'Science-based career, study & fitness leveling app with AI Coach, photo-based 3D avatar, and real-time cloud sync.',
         theme_color: '#0f172a',
         background_color: '#eef2f6',
         display: 'standalone',

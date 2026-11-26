@@ -14,9 +14,11 @@ Aplikasi web progresif (**PWA**) lintas perangkat untuk **HP (Android / iPhone)*
   - **AI Usage Audit Logs**: pantau riwayat pemanggilan AI secara real-time.
 - **Tampilan Adaptif HP & Laptop (PWA Offline)**: Grid 12-kolom Blender Studio di desktop dan **Bottom Navigation Bar** 5 tab di HP, bisa di-install ke Home Screen.
 - **5 Kemampuan Anti-Bias & Engine Sains**: Mifflin-St Jeor (BMR), Morton et al. (2018) protein `1.6g/kg`, Lamon et al. (2021) tidur `-18%`, Schoenfeld et al. (2017) volume latihan, dan Ericsson et al. (1993) deliberate practice.
-- **3D Aether Core Viewport (Three.js)** + **Cloud Firestore Real-Time Sync** (Jakarta `asia-southeast2`).
+- **Avatar 3D dari foto seluruh badan (MediaPipe dan Three.js)** + **Cloud Firestore Real-Time Sync** (Jakarta `asia-southeast2`).
 
 ---
+
+Foto seluruh badan diproses di browser. Avatar disimpan di perangkat dan bisa diganti atau dihapus dari panel. Sisi dan belakang adalah perkiraan dari satu foto. Pembuatan avatar memerlukan koneksi untuk memuat model MediaPipe.
 
 ## Struktur Project
 

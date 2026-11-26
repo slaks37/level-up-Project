@@ -65,7 +65,8 @@ import { MobileNav } from './components/MobileNav';
 import { AuthView } from './components/AuthView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AwakeningView } from './components/AwakeningView';
-import { ThreeCoreViewport } from './components/ThreeCoreViewport';
+import { ThreeAvatarViewport } from './components/ThreeAvatarViewport';
+import { avatarOwnerKey, deleteAvatarPhoto } from './services/avatarStorage';
 import {
   BioConditionPanel,
   DailyTasksPanel,
@@ -820,6 +821,7 @@ export default function App() {
     saveLocalPlayer(null);
     setPlayer(null);
     setModal(null);
+    await deleteAvatarPhoto(avatarOwnerKey(cloudUser?.uid)).catch(() => {});
     if (cloudUser) {
       try {
         await deleteProfileFromCloud(cloudUser.uid);
@@ -926,6 +928,7 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  const avatarOwner = avatarOwnerKey(cloudUser?.uid);
   const canAccessAdmin = isAdmin || isUnverifiedBootstrapAdmin;
   const pendingTasksCount = player ? player.quests.filter((q) => !q.completed).length : 0;
 
@@ -1036,7 +1039,9 @@ export default function App() {
                 />
               </div>
               <div className="lg:col-span-4">
-                <ThreeCoreViewport
+                <ThreeAvatarViewport
+                  key={avatarOwner}
+                  owner={avatarOwner}
                   coreCharge={player.coreCharge}
                   lang={lang}
                   onExtractOverdrive={handleExtractCoreOverdrive}

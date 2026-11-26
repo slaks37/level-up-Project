@@ -948,8 +948,8 @@ export const ResetConfirmModal: React.FC<{
   >
     <p className="text-xs text-slate-700">
       {lang === 'id'
-        ? 'Apakah kamu yakin ingin menghapus progres saat ini (termasuk di Cloud jika sedang login) dan membuat karakter/rencana impian baru?'
-        : 'Are you sure you want to clear your current progress (including Cloud if signed in) and create a new profile?'}
+        ? 'Reset ini menghapus progres saat ini dan avatar di perangkat ini. Jika sedang login, progres di Cloud juga akan dihapus.'
+        : 'This clears your current progress and the avatar on this device. If signed in, it also clears your cloud progress.'}
     </p>
     <div className="flex justify-end gap-2 pt-2">
       <button
