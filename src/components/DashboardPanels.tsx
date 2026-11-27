@@ -514,6 +514,8 @@ export const DailyTasksPanel: React.FC<{
   filter: QuestFilter;
   coinConfig?: CoinEconomyConfig;
   focus: { note: string; pendingNote: string; suggestions: DailyTaskSuggestion[] } | null;
+  pendingCheckInQuests?: Quest[];
+  onImportCheckInQuests?: () => void;
   onAddSuggestion: (task: DailyTaskSuggestion) => void;
   onChangeFilter: (f: QuestFilter) => void;
   onRequestCompleteQuest: (quest: Quest) => void;
@@ -526,6 +528,8 @@ export const DailyTasksPanel: React.FC<{
   filter,
   coinConfig = DEFAULT_COIN_ECONOMY,
   focus,
+  pendingCheckInQuests = [],
+  onImportCheckInQuests,
   onAddSuggestion,
   onChangeFilter,
   onRequestCompleteQuest,
@@ -586,6 +590,31 @@ export const DailyTasksPanel: React.FC<{
       <div className="p-4 flex-grow flex flex-col justify-between">
         <div>
           <p className="text-xs text-slate-600 mb-2.5">{tr(lang, 'questBoardHint')}</p>
+
+          {/* Recover uncaptured targets from today's Check-In note in 1 click */}
+          {pendingCheckInQuests.length > 0 && onImportCheckInQuests && (
+            <div className="mb-3 rounded border border-amber-300 bg-amber-50 p-2.5 text-xs space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-bold text-amber-950">
+                  {lang === 'id'
+                    ? `Ada ${pendingCheckInQuests.length} target dari Check-In hari ini yang belum masuk daftar tugas:`
+                    : `${pendingCheckInQuests.length} target(s) from today’s Check-In aren’t in your tasks yet:`}
+                </p>
+                <button
+                  type="button"
+                  onClick={onImportCheckInQuests}
+                  className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-700 text-white font-hud font-bold text-[11px] transition shrink-0"
+                >
+                  {lang === 'id' ? '+ Masukkan ke Tugas' : '+ Add to Tasks'}
+                </button>
+              </div>
+              <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-amber-900">
+                {pendingCheckInQuests.map((q) => (
+                  <li key={q.id} className="break-words">{q.title}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Dual-Track Indicator: Career + Dream running together */}
           <div className="mb-3 grid grid-cols-2 gap-2 text-[11px]">

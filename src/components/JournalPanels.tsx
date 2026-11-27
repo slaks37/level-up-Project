@@ -261,10 +261,9 @@ export function DailyCheckInModal({
   const [mood, setMood] = useState<Mood>(initial?.mood ?? '');
   const [note, setNote] = useState(initial?.note ?? '');
   const [minutes, setMinutes] = useState(String(initial?.extraMinutes ?? ''));
-  const hasPendingTasks = player.quests.some((q) => !q.completed);
-  const [captureToTodo, setCaptureToTodo] = useState(
-    phase === 'morning' || (phase === 'day' && !hasPendingTasks)
-  );
+  // Always default to true so whatever target/activity the user writes in Check-In
+  // (morning, day, or evening) is reliably added into Daily Tasks unless unchecked.
+  const [captureToTodo, setCaptureToTodo] = useState(true);
   const [keepDualTrack, setKeepDualTrack] = useState(true);
 
   const capturedPlan = useMemo(
@@ -275,9 +274,27 @@ export function DailyCheckInModal({
     [captureToTodo, keepDualTrack, note, player, lang]
   );
 
+  const parsedSleep = sleep.trim() === '' ? null : Number(sleep.replace(',', '.'));
+  const safeSleepHours =
+    parsedSleep !== null && Number.isFinite(parsedSleep)
+      ? Math.max(0, Math.min(24, Math.round(parsedSleep * 10) / 10))
+      : null;
+  const parsedMinutes = Number(minutes);
+  const safeExtraMinutes =
+    phase === 'morning' || !Number.isFinite(parsedMinutes)
+      ? 0
+      : Math.max(0, Math.min(1440, Math.round(parsedMinutes)));
+
   const draft: CheckInInput = {
-    sleepHours: sleep === '' ? null : Number(sleep), meal, mealNote: mealNote.trim(), mealEnjoyment, mealGroups,
-    energy, mood, note: note.trim(), extraMinutes: phase === 'morning' ? 0 : Number(minutes) || 0,
+    sleepHours: safeSleepHours,
+    meal,
+    mealNote: mealNote.trim().slice(0, 300),
+    mealEnjoyment,
+    mealGroups,
+    energy,
+    mood,
+    note: note.trim().slice(0, 1500),
+    extraMinutes: safeExtraMinutes,
   };
   const title = phase === 'morning' ? (id ? `Selamat pagi, ${name}` : `Good morning, ${name}`) :
     phase === 'day' ? (id ? `Halo, ${name}` : `Hello, ${name}`) : (id ? `Selamat malam, ${name}` : `Good evening, ${name}`);

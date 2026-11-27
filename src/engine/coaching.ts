@@ -313,13 +313,28 @@ export function buildCapturedTargetPlan(
   const existingTitles = new Set(
     player.quests.map((q) => q.title.trim().slice(0, 140).toLowerCase())
   );
+  // Split by newline, semicolon, and non-decimal comma (e.g. keep "1,5 jam" intact)
+  const splitSmartLine = (line: string): string[] => {
+    const semiParts = line.includes(';') ? line.split(';') : [line];
+    return semiParts.flatMap((part) => {
+      const commaParts = part
+        .split(/,(?!\s*\d)/)
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 2);
+      // Split by comma when it yields multiple meaningful action phrases (>= 3 chars each)
+      if (commaParts.length >= 2 && commaParts.every((s) => s.length >= 3)) {
+        return commaParts;
+      }
+      return [part];
+    });
+  };
   const rawLines = noteText
     .split(/\n+/)
-    .flatMap((line) => (line.includes(';') ? line.split(';') : [line]));
+    .flatMap((line) => splitSmartLine(line));
 
   const userTasks: CapturedTaskPreview[] = [];
   for (const raw of rawLines) {
-    if (userTasks.length >= 8) break;
+    if (userTasks.length >= 10) break;
     const parsed = parseDailyTargetLine(raw, player, lang);
     if (!parsed) continue;
     const key = parsed.quest.title.toLowerCase();

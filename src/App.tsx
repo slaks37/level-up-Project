@@ -1,5 +1,5 @@
 import type { AdminRole } from './engine/access';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import type {
   AIConfig,
@@ -1226,6 +1226,7 @@ export default function App() {
   }, []);
 
   const CHECKIN_DAILY_PROMPT_STORAGE_KEY = 'levelup_daily_checkin_prompted_v1';
+  const GYM_PROMPT_STORAGE_KEY = 'levelup_gym_setup_prompted_v1';
   const hasPromptedCheckInOnDate = (ownerKey: string, dayKey: string): boolean => {
     const composite = `${ownerKey}:${dayKey}`;
     if (promptedCheckIns.current.has(composite)) return true;
@@ -1249,11 +1250,41 @@ export default function App() {
       // ignore storage quota / private mode restrictions
     }
   };
+  const hasPromptedGymForOwner = (ownerKey: string): boolean => {
+    if (promptedGym.current.has(ownerKey)) return true;
+    try {
+      const raw = window.localStorage.getItem(GYM_PROMPT_STORAGE_KEY);
+      if (!raw) return false;
+      const map = JSON.parse(raw) as Record<string, boolean>;
+      return Boolean(map[ownerKey]);
+    } catch {
+      return false;
+    }
+  };
+  const markGymPromptedForOwner = (ownerKey: string): void => {
+    promptedGym.current.add(ownerKey);
+    try {
+      const raw = window.localStorage.getItem(GYM_PROMPT_STORAGE_KEY);
+      const map = raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+      map[ownerKey] = true;
+      window.localStorage.setItem(GYM_PROMPT_STORAGE_KEY, JSON.stringify(map));
+    } catch {
+      // ignore storage quota / private mode restrictions
+    }
+  };
 
   const { dateKey, phase } = getJournalMoment(new Date(now));
-  const hasCheckInToday = journal.records.some(
-    (entry) => entry.dateKey === dateKey || entry.id.startsWith(`${dateKey}-`)
+  const todayCheckIns = useMemo(
+    () =>
+      journal.records
+        .filter(
+          (entry): entry is CheckIn =>
+            entry.kind === 'checkin' && (entry.dateKey === dateKey || entry.id.startsWith(`${dateKey}-`))
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt),
+    [journal.records, dateKey]
   );
+  const hasCheckInToday = todayCheckIns.length > 0;
   const isPlayerReady = Boolean(player) && authResolved && !isAdminView && !showAuthScreen && journal.ready;
   const missingGym = Boolean(player && !player.gym);
   useEffect(() => {
@@ -1267,9 +1298,8 @@ export default function App() {
       setModal({ type: 'checkIn', dateKey, phase, owner: journal.key });
       return;
     }
-    const gymKey = journal.key + ':' + dateKey;
-    if (missingGym && !promptedGym.current.has(gymKey)) {
-      promptedGym.current.add(gymKey);
+    if (missingGym && !hasPromptedGymForOwner(journal.key)) {
+      markGymPromptedForOwner(journal.key);
       setModal({ type: 'coachSetup', section: 'gym' });
     }
   }, [isPlayerReady, hasCheckInToday, modal, journal.key, dateKey, phase, missingGym]);
@@ -1320,12 +1350,65 @@ export default function App() {
   });
 
   const openCheckIn = () => setModal({ type: 'checkIn', ...getJournalMoment(), owner: journal.key });
+  const pendingCheckInQuests = useMemo(() => {
+    if (!player || todayCheckIns.length === 0) return [];
+    const combinedNote = todayCheckIns
+      .map((entry) => entry.note.trim())
+      .filter(Boolean)
+      .join('\n');
+    if (!combinedNote) return [];
+    const plan = buildCapturedTargetPlan(combinedNote, player, lang, {
+      includeDualTrackCompanion: false,
+    });
+    return plan.userTasks.map((t) => t.quest);
+  }, [player, todayCheckIns, lang]);
+
+  const handleImportCheckInQuests = () => {
+    const current = playerRef.current;
+    if (!current || pendingCheckInQuests.length === 0) return;
+    const existingTitles = new Set(
+      current.quests.map((q) => q.title.trim().slice(0, 140).toLowerCase())
+    );
+    const uniqueToAdd = pendingCheckInQuests.filter(
+      (q) => !existingTitles.has(q.title.trim().slice(0, 140).toLowerCase())
+    );
+    if (uniqueToAdd.length === 0) return;
+    commitPlayerChange({
+      ...current,
+      quests: [...uniqueToAdd, ...current.quests].slice(0, 100),
+    });
+    playSFX('quest');
+    notify(
+      lang === 'id'
+        ? `${uniqueToAdd.length} target dari Check-In hari ini berhasil masuk ke Tugas Harian!`
+        : `${uniqueToAdd.length} target(s) from today’s Check-In added to Daily Tasks!`,
+      'success'
+    );
+  };
+
   const saveCheckIn = (input: CheckInInput, options?: CheckInCaptureOptions) => {
     if (modal?.type !== 'checkIn' || modal.owner !== journal.key) return;
     const entryId = modal.dateKey + '-' + modal.phase;
     const isNewSlot = !journal.records.some((record) => record.id === entryId);
-    const entry: CheckIn = { ...input, id: entryId,
-      dateKey: modal.dateKey, phase: modal.phase, kind: 'checkin', updatedAt: Date.now() };
+    const safeSleep =
+      input.sleepHours !== null && Number.isFinite(input.sleepHours)
+        ? Math.max(0, Math.min(24, Math.round(input.sleepHours * 10) / 10))
+        : null;
+    const safeExtra = Number.isFinite(input.extraMinutes)
+      ? Math.max(0, Math.min(1440, Math.round(input.extraMinutes)))
+      : 0;
+    const entry: CheckIn = {
+      ...input,
+      sleepHours: safeSleep,
+      mealNote: (input.mealNote || '').trim().slice(0, 300),
+      note: (input.note || '').trim().slice(0, 1500),
+      extraMinutes: safeExtra,
+      id: entryId,
+      dateKey: modal.dateKey,
+      phase: modal.phase,
+      kind: 'checkin',
+      updatedAt: Date.now(),
+    };
     journal.save(entry);
     markCheckInPromptedOnDate(journal.key, modal.dateKey);
     setModal(null);
@@ -1341,7 +1424,7 @@ export default function App() {
       return;
     }
 
-    const captureEnabled = options?.captureToTodo ?? (modal.phase === 'morning');
+    const captureEnabled = options?.captureToTodo ?? true;
     const keepDualTrack = options?.keepDualTrack ?? true;
     const captured =
       captureEnabled && input.note.trim()
@@ -1755,6 +1838,8 @@ export default function App() {
                   filter={questFilter}
                   coinConfig={coinConfig}
                   focus={focus}
+                  pendingCheckInQuests={pendingCheckInQuests}
+                  onImportCheckInQuests={handleImportCheckInQuests}
                   onAddSuggestion={addSuggestedTask}
                   onChangeFilter={(f) => {
                     playSFX('click');
@@ -2063,7 +2148,9 @@ export default function App() {
 
       {modal?.type === 'checkIn' && player && !isAdminView && modal.owner === journal.key && (() => {
         const id = modal.dateKey + '-' + modal.phase;
-        const saved = journal.records.find((entry): entry is CheckIn => entry.kind === 'checkin' && entry.id === id);
+        const saved =
+          journal.records.find((entry): entry is CheckIn => entry.kind === 'checkin' && entry.id === id) ||
+          todayCheckIns[0];
         return <DailyCheckInModal key={journal.key + id} name={player.name} player={player} coinConfig={coinConfig} lang={lang} phase={modal.phase} initial={saved}
           photoKey={'meal:' + journal.key + ':' + id} evidence={getDailyEvidence(journal.records, dailyLogs, modal.dateKey, player.age)}
           previewReflection={(input) => {
@@ -2071,7 +2158,11 @@ export default function App() {
             return createDailyReflection({ owner: journal.key, player, dateKey: modal.dateKey, phase: modal.phase, now, lang,
               events: calendarEvents, evidence: getDailyEvidence(mergeJournal(journal.records, [draft]), dailyLogs, modal.dateKey, player.age) });
           }}
-          onSave={saveCheckIn} onClose={() => setModal(null)} />;
+          onSave={saveCheckIn}
+          onClose={() => {
+            markCheckInPromptedOnDate(journal.key, modal.dateKey);
+            setModal(null);
+          }} />;
       })()}
 
       {modal?.type === 'completeDay' && player && (

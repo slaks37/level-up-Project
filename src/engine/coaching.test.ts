@@ -86,6 +86,41 @@ describe('coaching engine — dual-track target capture & workout safety', () =>
     expect(plan.companionTasks.some((t) => t.autoCompanion === 'career')).toBe(true);
   });
 
+  it('splits comma-separated daily check-in targets into individual tasks while keeping decimal durations intact', () => {
+    const player = makePlayer();
+    const plan = buildCapturedTargetPlan(
+      'Cek semua pekerjaan minggu depan dan 2minggu berikutnya, planning and research untuk tahun 2027, buatin produk baru',
+      player,
+      'id',
+      { includeDualTrackCompanion: false }
+    );
+    expect(plan.userTasks).toHaveLength(3);
+    expect(plan.userTasks[0].quest.title).toBe('Cek semua pekerjaan minggu depan dan 2minggu berikutnya');
+    expect(plan.userTasks[1].quest.title).toBe('planning and research untuk tahun 2027');
+    expect(plan.userTasks[1].quest.category).toBe('STUDY');
+    expect(plan.userTasks[2].quest.title).toBe('buatin produk baru');
+
+    // Keep decimal comma like "1,5 jam" intact while still splitting distinct tasks
+    const decimalPlan = buildCapturedTargetPlan('Olahraga 1,5 jam, belajar coding 30 menit', player, 'id', {
+      includeDualTrackCompanion: false,
+    });
+    expect(decimalPlan.userTasks).toHaveLength(2);
+    expect(decimalPlan.userTasks[0].quest.category).toBe('FITNESS');
+    expect(decimalPlan.userTasks[0].quest.defaultQty).toBe(90);
+    expect(decimalPlan.userTasks[1].quest.category).toBe('STUDY');
+    expect(decimalPlan.userTasks[1].quest.defaultQty).toBe(30);
+
+    // Deduplicate when tasks already exist on player.quests
+    const updatedPlayer = { ...player, quests: [...plan.allQuestsToAdd, ...player.quests] };
+    const secondRun = buildCapturedTargetPlan(
+      'Cek semua pekerjaan minggu depan dan 2minggu berikutnya, planning and research untuk tahun 2027, buatin produk baru',
+      updatedPlayer,
+      'id',
+      { includeDualTrackCompanion: false }
+    );
+    expect(secondRun.userTasks).toHaveLength(0);
+  });
+
   it('stops workout recommendations when pain is flagged', () => {
     const player = makePlayer();
     player.gym = { ...player.gym!, currentPain: true };
