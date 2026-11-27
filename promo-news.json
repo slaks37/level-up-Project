@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-26",
+  "date": "2026-11-27",
   "checks": {
     "Indomaret": true,
     "Alfagift": true
@@ -70,47 +70,11 @@
       "end": "2026-12-02"
     },
     {
-      "title": "Katalog Promo Gantung Alfamart 25–30 November: Penuhi Kebutuhan Harian Lebih Hemat",
+      "title": "[TERBARU] Katalog Promo Muraah Bangett 27 Nov–3 Des 2026 di Alfagift",
       "source": "Alfagift",
-      "url": "https://blog.alfagift.id/katalog-promo-gantung-alfamart/",
-      "kind": "promo",
-      "published": "2026-11-25",
-      "start": "2026-11-25",
-      "end": "2026-11-30"
-    },
-    {
-      "title": "Harga Super Alfagift: Belanja Produk Online Pilihan dengan Harga Lebih Cuan!",
-      "source": "Alfagift",
-      "url": "https://blog.alfagift.id/harga-super-alfagift/",
+      "url": "https://blog.alfagift.id/promo-muraah-bangett/",
       "kind": "news",
-      "published": "2026-11-24"
-    },
-    {
-      "title": "Promo Dwi Mingguan Alfamart: Belanja Lebih Hemat pada 16-30 November",
-      "source": "Alfagift",
-      "url": "https://blog.alfagift.id/pdm-promo-dwi-mingguan-alfamart-november/",
-      "kind": "promo",
-      "published": "2026-11-24",
-      "start": "2026-11-16",
-      "end": "2026-11-30"
-    },
-    {
-      "title": "Update Katalog Promo Murah Sejagat (Murgat) Alfamart Periode 24–30 November 2026: Pilihan Produk Susu, Mi Instan, Dapur & Kebutuhan Harian",
-      "source": "Alfagift",
-      "url": "https://blog.alfagift.id/katalog-promo-murah-sejagat-alfamart/",
-      "kind": "promo",
-      "published": "2026-11-24",
-      "start": "2026-11-24",
-      "end": "2026-11-30"
-    },
-    {
-      "title": "Katalog Promo Alfamart Hari Ini: Promo JANTAN Diskon Hingga 55% Periode 1–30 November 2026",
-      "source": "Alfagift",
-      "url": "https://blog.alfagift.id/promo-alfamart-hari-ini/",
-      "kind": "promo",
-      "published": "2026-11-24",
-      "start": "2026-11-01",
-      "end": "2026-11-30"
+      "published": "2026-11-26"
     }
   ]
 }
