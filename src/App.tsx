@@ -146,6 +146,9 @@ const BusinessStudioWorkspace = lazy(() =>
 const AgnesCopilotWorkspace = lazy(() =>
   import('./components/AgnesCopilotWorkspace').then((module) => ({ default: module.AgnesCopilotWorkspace }))
 );
+const LandingHomepage = lazy(() =>
+  import('./components/LandingHomepage').then((module) => ({ default: module.LandingHomepage }))
+);
 
 type ActiveWorkspace = 'today' | 'academy' | 'studio' | 'agnes';
 
@@ -197,9 +200,10 @@ export default function App() {
   const [modal, setModal] = useState<ActiveModal>(null);
   const { toasts, notify } = useToasts();
 
-  // Auth / Admin / Routing States (Direct Online Account Required — no guest/offline bypass)
+  // Auth / Admin / Routing States (Landing Homepage -> Direct Account Login; no offline guest trial)
   const [authResolved, setAuthResolved] = useState(false);
   const [showAuthScreen, setShowAuthScreen] = useState(false);
+  const [authInitialMode, setAuthInitialMode] = useState<'login' | 'register'>('login');
   const [isAdminView, setIsAdminView] = useState<boolean>(
     () => isDedicatedAdminHost || isAdminPath(window.location.pathname)
   );
@@ -1354,13 +1358,20 @@ export default function App() {
   const canAccessAdmin = isAdmin || isUnverifiedBootstrapAdmin;
   const pendingTasksCount = player ? player.quests.filter((q) => !q.completed).length : 0;
 
-  // Direct login required whenever Firebase is active (no offline guest trial bypass)
+  // Unauthenticated public visitors see the LevelUp Homepage first, then direct Email/Google login (no offline guest trial)
   const awaitingCloudProfile = Boolean(cloudUser && !isAdminView && !player && !cloudProfileReady);
   const availableDeviceProfile = cloudUser && cloudProfileReady && !player ? loadLocalPlayer(lang) : null;
+  const shouldShowLandingHome =
+    isFirebaseReady() &&
+    authResolved &&
+    !cloudUser &&
+    !isAdminView &&
+    !showAuthScreen;
   const shouldShowAuthGate =
     isFirebaseReady() &&
     authResolved &&
-    !cloudUser;
+    !cloudUser &&
+    (isAdminView || showAuthScreen);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -1373,7 +1384,10 @@ export default function App() {
         canAccessAdmin={canAccessAdmin}
         isAdminView={isAdminView}
         onToggleAdminView={() => navigateAdminView(!isAdminView)}
-        onOpenAuthScreen={() => setShowAuthScreen(true)}
+        onOpenAuthScreen={() => {
+          setAuthInitialMode('login');
+          setShowAuthScreen(true);
+        }}
         canInstallPWA={!isDedicatedAdminHost && Boolean(installPrompt)}
         onInstallPWA={() => void handleInstallPWA()}
         onOpenScience={() => setModal({ type: 'science' })}
@@ -1390,8 +1404,10 @@ export default function App() {
       )}
 
       <main
-        className={`flex-grow max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-5 ${
-          player && !isAdminView && !shouldShowAuthGate ? 'pb-24 lg:pb-8' : ''
+        className={`flex-grow w-full mx-auto px-3 sm:px-6 py-4 sm:py-5 ${
+          shouldShowLandingHome ? '' : 'max-w-7xl'
+        } ${
+          player && !isAdminView && !shouldShowAuthGate && !shouldShowLandingHome ? 'pb-24 lg:pb-8' : ''
         }`}
       >
         {isFirebaseReady() && !authResolved ? (
@@ -1401,14 +1417,38 @@ export default function App() {
               {lang === 'id' ? 'Memeriksa sesi akun Cloud...' : 'Checking Cloud session...'}
             </p>
           </div>
+        ) : shouldShowLandingHome ? (
+          <Suspense
+            fallback={
+              <div className="max-w-md mx-auto py-16 text-center space-y-2">
+                <div className="w-8 h-8 border-2 border-amber-600 border-t-transparent rounded-full animate-spin mx-auto" />
+                <p className="font-mono text-xs text-slate-600">
+                  {lang === 'id' ? 'Memuat Beranda Level Up...' : 'Loading Level Up Home...'}
+                </p>
+              </div>
+            }
+          >
+            <LandingHomepage
+              lang={lang}
+              onOpenAuth={(mode) => {
+                setAuthInitialMode(mode);
+                setShowAuthScreen(true);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+            />
+          </Suspense>
         ) : shouldShowAuthGate ? (
           <AuthView
+            key={authInitialMode}
             lang={lang}
             adminOnly={isAdminView}
+            initialMode={authInitialMode}
             onExit={() => {
               if (isDedicatedAdminHost || isAdminView) {
                 navigateAdminView(false);
+                return;
               }
+              setShowAuthScreen(false);
             }}
             onNotify={notify}
           />
@@ -1719,7 +1759,7 @@ export default function App() {
         )}
       </main>
 
-      {player && !isAdminView && !shouldShowAuthGate && (
+      {player && !isAdminView && !shouldShowAuthGate && !shouldShowLandingHome && (
         <MobileNav
           activeTab={mobileTab}
           onSelectTab={(t) => {

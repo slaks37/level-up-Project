@@ -25,6 +25,7 @@ import { prepareGoogleOAuth } from '../services/googleCalendar';
 interface AuthViewProps {
   lang: Language;
   adminOnly?: boolean;
+  initialMode?: 'login' | 'register' | 'reset';
   onExit: () => void;
   onNotify: (msg: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
@@ -67,8 +68,14 @@ function translateAuthError(err: unknown, lang: Language): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onExit, onNotify }) => {
-  const [mode, setMode] = useState<'login' | 'register' | 'reset'>('login');
+export const AuthView: React.FC<AuthViewProps> = ({
+  lang,
+  adminOnly = false,
+  initialMode = 'login',
+  onExit,
+  onNotify,
+}) => {
+  const [mode, setMode] = useState<'login' | 'register' | 'reset'>(adminOnly && initialMode === 'register' ? 'login' : initialMode);
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -394,17 +401,21 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
             </span>
           </button>
 
-          {adminOnly && (
-            <div className="pt-1 border-t border-slate-200 text-center">
-              <button
-                type="button"
-                onClick={onExit}
-                className="text-xs font-semibold text-slate-500 hover:text-slate-800 underline"
-              >
-                {lang === 'id' ? 'Kembali ke Level Up' : 'Back to Level Up'}
-              </button>
-            </div>
-          )}
+          <div className="pt-1 border-t border-slate-200 text-center">
+            <button
+              type="button"
+              onClick={onExit}
+              className="text-xs font-semibold text-slate-500 hover:text-slate-800 underline"
+            >
+              {adminOnly
+                ? lang === 'id'
+                  ? '← Kembali ke Level Up'
+                  : '← Back to Level Up'
+                : lang === 'id'
+                  ? '← Kembali ke Beranda Level Up'
+                  : '← Back to Level Up Home'}
+            </button>
+          </div>
         </div>
       </div>
     </section>
