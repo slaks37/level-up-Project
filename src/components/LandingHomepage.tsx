@@ -16,6 +16,8 @@ import {
   HeartHandshake,
   Layers,
   Lock,
+  Maximize2,
+  Play,
   ShieldCheck,
   ShoppingBag,
   Sparkles,
@@ -23,7 +25,9 @@ import {
   Ticket,
   TrendingUp,
   Users,
+  Volume2,
   Wrench,
+  X,
 } from 'lucide-react';
 import type { Language } from '../types';
 import { DEVELOPMENT_DIMENSIONS } from '../engine/v2/dimensions';
@@ -128,12 +132,19 @@ const AGNES_MODES_LIST = [
   'Daily Planner',
 ] as const;
 
+const HERO_YOUTUBE_ID = 'ZP_SPrmzwo0';
+const HERO_YOUTUBE_WATCH_URL = `https://youtu.be/${HERO_YOUTUBE_ID}`;
+const HERO_AMBIENT_EMBED_URL = `https://www.youtube.com/embed/${HERO_YOUTUBE_ID}?autoplay=1&mute=1&loop=1&playlist=${HERO_YOUTUBE_ID}&controls=0&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3&disablekb=1`;
+const HERO_PLAYER_EMBED_URL = `https://www.youtube.com/embed/${HERO_YOUTUBE_ID}?autoplay=1&rel=0&modestbranding=1&playsinline=1`;
+
 type ShowcaseTab = 'hud' | 'academy' | 'studio' | 'agnes';
 
 export const LandingHomepage: React.FC<LandingHomepageProps> = ({ lang, onOpenAuth }) => {
   const id = lang === 'id';
   const [checkedQuests, setCheckedQuests] = useState<Record<number, boolean>>({ 0: true, 1: true });
   const [activeShowcase, setActiveShowcase] = useState<ShowcaseTab>('hud');
+  const [heroVideoMode, setHeroVideoMode] = useState<'ambient' | 'inline' | 'cinema'>('ambient');
+  const [posterUrl, setPosterUrl] = useState(`https://i.ytimg.com/vi/${HERO_YOUTUBE_ID}/maxresdefault.jpg`);
 
   const toggleSampleQuest = (index: number) => {
     setCheckedQuests((prev) => ({ ...prev, [index]: !prev[index] }));
@@ -147,40 +158,54 @@ export const LandingHomepage: React.FC<LandingHomepageProps> = ({ lang, onOpenAu
   return (
     <div className="bg-[#faf9f5] text-slate-900 -mx-3 sm:-mx-6 -my-4 sm:-my-5 border-t border-stone-200/80">
       {/* ===================================================================== */}
-      {/* 1. HERO SECTION — WARM EDITORIAL + INTERACTIVE DAILY QUEST PREVIEW    */}
+      {/* 1. CINEMATIC VIDEO HERO — LEVEL UP TEASER (YOUTUBE: ZP_SPrmzwo0)      */}
       {/* ===================================================================== */}
-      <section className="relative overflow-hidden border-b border-stone-200 bg-gradient-to-b from-white via-[#faf9f5] to-[#f4f1ea]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center">
-            {/* Left Copy */}
-            <div className="lg:col-span-7 space-y-6">
-              <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-amber-300/80 bg-amber-50/90 px-3.5 py-1 text-[11px] font-mono font-bold text-amber-900">
-                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+      <section className="relative overflow-hidden bg-slate-950 text-white border-b border-stone-800">
+        {/* Full-bleed Ambient Video Backdrop + Poster Fallback */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none select-none">
+          <img
+            src={posterUrl}
+            onError={() => setPosterUrl(`https://i.ytimg.com/vi/${HERO_YOUTUBE_ID}/hqdefault.jpg`)}
+            alt="Level UP Teaser"
+            className="w-full h-full object-cover scale-105 opacity-40"
+          />
+          {heroVideoMode === 'ambient' && (
+            <iframe
+              src={HERO_AMBIENT_EMBED_URL}
+              title="Level UP Teaser Background"
+              allow="autoplay; encrypted-media; picture-in-picture"
+              referrerPolicy="strict-origin-when-cross-origin"
+              tabIndex={-1}
+              aria-hidden="true"
+              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[177.78vh] min-w-full h-[56.25vw] min-h-full opacity-55 border-0"
+            />
+          )}
+          {/* Cinematic Contrast Scrim */}
+          <div className="absolute inset-0 bg-gradient-to-r from-slate-950/95 via-slate-950/75 to-slate-950/55" />
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-slate-950/50" />
+        </div>
+
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center">
+            {/* Left Hero Copy */}
+            <div className="lg:col-span-6 space-y-6">
+              <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-amber-400/40 bg-amber-500/15 backdrop-blur-xs px-3.5 py-1 text-[11px] font-mono font-bold text-amber-200">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
                 <span>LEVELUP 2.0 · HUMAN &amp; SOCIOPRENEUR DEVELOPMENT OS</span>
               </div>
 
               <div className="space-y-3">
-                <p className="font-mono text-xs font-bold uppercase tracking-widest text-sky-700">
+                <p className="font-mono text-xs font-bold uppercase tracking-widest text-sky-300">
                   Level Up System — Awaken Your Entrepreneurial Spirit
                 </p>
-                <h1 className="font-hud text-3xl sm:text-5xl font-bold tracking-tight text-slate-900 leading-[1.12]">
-                  {id ? (
-                    <>
-                      Level Up Yourself.{' '}
-                      <span className="text-amber-700">Level Up Your Business.</span>{' '}
-                      <span className="text-sky-700">Level Up Your Impact.</span>
-                    </>
-                  ) : (
-                    <>
-                      Level Up Yourself.{' '}
-                      <span className="text-amber-700">Level Up Your Business.</span>{' '}
-                      <span className="text-sky-700">Level Up Your Impact.</span>
-                    </>
-                  )}
+                <h1 className="font-hud text-3xl sm:text-5xl font-bold tracking-tight text-white leading-[1.12] drop-shadow-sm">
+                  Level Up Yourself.{' '}
+                  <span className="text-amber-300">Level Up Your Business.</span>{' '}
+                  <span className="text-sky-300">Level Up Your Impact.</span>
                 </h1>
               </div>
 
-              <p className="text-sm sm:text-base text-slate-600 leading-relaxed max-w-2xl">
+              <p className="text-sm sm:text-base text-slate-200 leading-relaxed max-w-xl">
                 {id
                   ? 'Bukan sekadar LMS konvensional. Level Up adalah sistem operasi harian untuk menjalani proses menjadi sociopreneur setiap hari — mulai dari membentuk kebiasaan, kesehatan, karier, belajar di Academy, membangun usaha di Business Studio, hingga mengakses pasar Sociopreneur.online.'
                   : 'Not a conventional LMS. Level Up is a daily operating system to live the sociopreneur journey every day — building habits, health, career skills, Academy competencies, Business Studio ventures, and real market access through Sociopreneur.online.'}
@@ -191,149 +216,200 @@ export const LandingHomepage: React.FC<LandingHomepageProps> = ({ lang, onOpenAu
                 <button
                   type="button"
                   onClick={() => onOpenAuth('register')}
-                  className="px-5 py-3 rounded-lg bg-slate-900 hover:bg-amber-700 text-white font-hud font-bold text-sm uppercase tracking-wider flex items-center gap-2 shadow-sm transition btn-anime"
+                  className="px-5 py-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-hud font-bold text-sm uppercase tracking-wider flex items-center gap-2 shadow-lg shadow-amber-950/40 transition btn-anime"
                 >
                   <span>{id ? 'Mulai Perjalananmu' : 'Start Your Journey'}</span>
-                  <ArrowRight className="w-4 h-4 text-amber-400" />
+                  <ArrowRight className="w-4 h-4" />
                 </button>
                 <button
                   type="button"
                   onClick={() => onOpenAuth('login')}
-                  className="px-5 py-3 rounded-lg bg-white hover:bg-stone-100 border border-stone-300 text-slate-900 font-hud font-bold text-sm uppercase tracking-wider transition btn-anime"
+                  className="px-5 py-3 rounded-lg bg-white/10 hover:bg-white/20 border border-white/25 backdrop-blur-xs text-white font-hud font-bold text-sm uppercase tracking-wider transition btn-anime"
                 >
                   {id ? 'Masuk ke Akun' : 'Sign In'}
                 </button>
-                <a
-                  href="#cara-kerja"
-                  className="px-3 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 underline underline-offset-4"
+                <button
+                  type="button"
+                  onClick={() => setHeroVideoMode('cinema')}
+                  className="px-4 py-3 rounded-lg bg-slate-900/70 hover:bg-slate-800/90 border border-amber-400/35 text-amber-200 font-mono font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 transition"
                 >
-                  {id ? 'Lihat 10 Tahap Sociopreneur ↓' : 'See 10-Stage Journey ↓'}
-                </a>
+                  <Volume2 className="w-4 h-4 text-amber-400" />
+                  <span>{id ? 'Tonton Teaser (Suara)' : 'Watch Teaser (Sound)'}</span>
+                </button>
               </div>
 
               {/* Trust / Capability Strip */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-stone-200/80 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-white/15 text-xs">
                 <div>
-                  <p className="font-hud text-xl font-bold text-slate-900">7</p>
-                  <p className="text-slate-600">{id ? 'Dimensi Pengembangan' : 'Growth Dimensions'}</p>
+                  <p className="font-hud text-xl font-bold text-white">7</p>
+                  <p className="text-slate-300">{id ? 'Dimensi Pengembangan' : 'Growth Dimensions'}</p>
                 </div>
                 <div>
-                  <p className="font-hud text-xl font-bold text-slate-900">16</p>
-                  <p className="text-slate-600">{id ? 'Tools Business Studio' : 'Business Studio Tools'}</p>
+                  <p className="font-hud text-xl font-bold text-white">16</p>
+                  <p className="text-slate-300">{id ? 'Tools Business Studio' : 'Business Studio Tools'}</p>
                 </div>
                 <div>
-                  <p className="font-hud text-xl font-bold text-slate-900">10</p>
-                  <p className="text-slate-600">{id ? 'Mode Agnes AI Copilot' : 'Agnes AI Copilot Modes'}</p>
+                  <p className="font-hud text-xl font-bold text-white">10</p>
+                  <p className="text-slate-300">{id ? 'Mode Agnes AI Copilot' : 'Agnes AI Copilot Modes'}</p>
                 </div>
                 <div>
-                  <p className="font-hud text-xl font-bold text-slate-900">30+</p>
-                  <p className="text-slate-600">{id ? 'Profesi & 6 Pathway' : 'Professions & 6 Pathways'}</p>
+                  <p className="font-hud text-xl font-bold text-white">30+</p>
+                  <p className="text-slate-300">{id ? 'Profesi & 6 Pathway' : 'Professions & 6 Pathways'}</p>
                 </div>
               </div>
             </div>
 
-            {/* Right Interactive Preview Card (Gamified Daily Quest Demo) */}
-            <div className="lg:col-span-5">
-              <div className="rounded-2xl border border-stone-300/90 bg-white shadow-lg shadow-stone-200/70 overflow-hidden">
-                <div className="px-4 py-3 bg-stone-50 border-b border-stone-200 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                    <span className="font-mono text-[11px] font-bold text-slate-700">
-                      {id ? 'PRATINJAU INTERAKTIF · DAILY QUESTS' : 'INTERACTIVE PREVIEW · DAILY QUESTS'}
+            {/* Right Featured 16:9 Level UP Teaser Player */}
+            <div className="lg:col-span-6">
+              <div className="rounded-2xl border border-white/20 bg-slate-900/75 backdrop-blur-md shadow-2xl shadow-black/60 overflow-hidden">
+                {/* Player Top Chrome */}
+                <div className="px-4 py-2.5 bg-slate-950/70 border-b border-white/10 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+                    <span className="font-mono text-[11px] font-bold text-slate-200 truncate">
+                      {id ? 'OFFICIAL TEASER · LEVEL UP SYSTEM' : 'OFFICIAL TEASER · LEVEL UP SYSTEM'}
                     </span>
                   </div>
-                  <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-slate-900 text-amber-400">
-                    +{demoExp} EXP · +{demoCoins} KOIN
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setHeroVideoMode('cinema')}
+                      className="text-[11px] font-mono font-bold text-amber-300 hover:text-amber-200 flex items-center gap-1"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">{id ? 'Layar Penuh' : 'Cinema'}</span>
+                    </button>
+                    <a
+                      href={HERO_YOUTUBE_WATCH_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] font-mono text-slate-400 hover:text-white flex items-center gap-1"
+                    >
+                      <span>YouTube</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
                 </div>
 
-                <div className="p-4 sm:p-5 space-y-4">
-                  {/* 3-Axis Progression Mini Bar */}
-                  <div className="grid grid-cols-3 gap-2 text-center">
-                    <div className="rounded-lg border border-stone-200 bg-[#faf9f5] p-2">
-                      <p className="font-mono text-[9px] text-slate-500 uppercase">EXP Level</p>
-                      <p className="font-hud text-sm font-bold text-slate-900">Lv. 4</p>
-                    </div>
-                    <div className="rounded-lg border border-stone-200 bg-[#faf9f5] p-2">
-                      <p className="font-mono text-[9px] text-slate-500 uppercase">Competency</p>
-                      <p className="font-hud text-sm font-bold text-indigo-800">Lv. 2</p>
-                    </div>
-                    <div className="rounded-lg border border-stone-200 bg-[#faf9f5] p-2">
-                      <p className="font-mono text-[9px] text-slate-500 uppercase">Business</p>
-                      <p className="font-hud text-sm font-bold text-emerald-800">Prototype</p>
-                    </div>
-                  </div>
-
-                  {/* Live progress bar */}
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-[11px] font-semibold">
-                      <span className="text-slate-700 flex items-center gap-1">
-                        <Flame className="w-3.5 h-3.5 text-orange-600" />
-                        {id ? 'Coba klik tugas di bawah:' : 'Try toggling quests below:'}
-                      </span>
-                      <span className="font-mono text-amber-800 font-bold">
-                        {completedDemoCount}/{SAMPLE_QUESTS.length} ({demoPct}%)
-                      </span>
-                    </div>
-                    <div className="h-2 rounded-full bg-stone-200 overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-amber-600 to-emerald-600 transition-all duration-300"
-                        style={{ width: `${demoPct}%` }}
+                {/* 16:9 Stage */}
+                <div className="relative aspect-video bg-black">
+                  {heroVideoMode === 'inline' ? (
+                    <iframe
+                      src={HERO_PLAYER_EMBED_URL}
+                      title="Level UP Teaser"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      referrerPolicy="strict-origin-when-cross-origin"
+                      allowFullScreen
+                      className="w-full h-full border-0"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setHeroVideoMode('inline')}
+                      className="group relative w-full h-full block text-left focus:outline-none"
+                      aria-label={id ? 'Putar Video Level UP Teaser dengan suara' : 'Play Level UP Teaser with sound'}
+                    >
+                      <img
+                        src={posterUrl}
+                        onError={() => setPosterUrl(`https://i.ytimg.com/vi/${HERO_YOUTUBE_ID}/hqdefault.jpg`)}
+                        alt="Level UP Teaser"
+                        className="w-full h-full object-cover group-hover:scale-[1.03] transition duration-500"
                       />
-                    </div>
-                  </div>
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/25 to-slate-950/20 group-hover:via-slate-950/15 transition" />
 
-                  {/* Interactive Demo Quests */}
-                  <div className="space-y-2">
-                    {SAMPLE_QUESTS.map((q, idx) => {
-                      const done = Boolean(checkedQuests[idx]);
-                      return (
-                        <button
-                          key={q.time}
-                          type="button"
-                          onClick={() => toggleSampleQuest(idx)}
-                          className={`w-full text-left p-2.5 rounded-xl border transition flex items-start gap-2.5 ${
-                            done
-                              ? 'bg-emerald-50/70 border-emerald-300'
-                              : 'bg-white border-stone-200 hover:border-amber-400'
-                          }`}
-                        >
-                          <span
-                            className={`mt-0.5 w-4 h-4 rounded flex items-center justify-center border shrink-0 transition ${
-                              done ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-stone-400 text-transparent'
-                            }`}
-                          >
-                            <Check className="w-3 h-3" />
-                          </span>
-                          <div className="min-w-0 flex-grow">
-                            <div className="flex items-center justify-between gap-1 text-[10px] font-mono">
-                              <span className="font-bold text-amber-800">
-                                {q.time} · {id ? q.tagId : q.tagEn}
-                              </span>
-                              <span className="text-slate-500">+{q.xp} EXP · +{q.coin} KOIN</span>
-                            </div>
-                            <p className={`text-xs font-semibold mt-0.5 ${done ? 'line-through text-slate-500' : 'text-slate-900'}`}>
-                              {id ? q.titleId : q.titleEn}
-                            </p>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
+                      {/* Central Play Trigger */}
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4">
+                        <span className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-amber-500/95 group-hover:bg-amber-400 group-hover:scale-110 text-slate-950 flex items-center justify-center shadow-xl shadow-black/50 ring-4 ring-white/25 transition">
+                          <Play className="w-7 h-7 sm:w-8 sm:h-8 fill-slate-950 ml-1" />
+                        </span>
+                        <span className="px-3.5 py-1.5 rounded-full bg-slate-950/80 border border-white/20 backdrop-blur-xs font-mono text-[11px] font-bold text-white flex items-center gap-1.5">
+                          <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                          {id ? 'Putar Level UP Teaser Dengan Suara' : 'Play Level UP Teaser With Sound'}
+                        </span>
+                      </div>
 
-                  <button
-                    type="button"
-                    onClick={() => onOpenAuth('register')}
-                    className="w-full py-2.5 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-hud font-bold text-xs uppercase tracking-wider transition"
-                  >
-                    {id ? 'Masuk / Daftar untuk Menyimpan Progres Nyatamu →' : 'Sign In / Register to Save Real Progress →'}
-                  </button>
+                      {/* Bottom Caption Strip */}
+                      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-2 text-[11px] font-mono text-slate-200">
+                        <span className="truncate font-semibold">Level UP Teaser</span>
+                        <span className="px-2 py-0.5 rounded bg-white/15 backdrop-blur-xs text-[10px] text-amber-200 shrink-0">
+                          HD 16:9
+                        </span>
+                      </div>
+                    </button>
+                  )}
+                </div>
+
+                {/* Bottom Action Footer */}
+                <div className="px-4 py-3 bg-slate-950/80 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-300">
+                    {id
+                      ? 'Siap berubah dari penonton menjadi pelaku nyata?'
+                      : 'Ready to move from watching to taking daily action?'}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {heroVideoMode === 'inline' && (
+                      <button
+                        type="button"
+                        onClick={() => setHeroVideoMode('ambient')}
+                        className="px-2.5 py-1 rounded-md border border-white/20 text-[11px] font-mono text-slate-300 hover:text-white transition"
+                      >
+                        {id ? 'Kembali ke Pratinjau' : 'Back to Preview'}
+                      </button>
+                    )}
+                    <a
+                      href="#cara-kerja"
+                      className="font-mono text-[11px] font-bold text-amber-300 hover:text-amber-200 underline underline-offset-4"
+                    >
+                      {id ? 'Lihat 10 Tahap ↓' : 'See 10 Stages ↓'}
+                    </a>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
       </section>
+
+      {/* Fullscreen Cinema Video Modal */}
+      {heroVideoMode === 'cinema' && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Level UP Teaser Cinema Player"
+          onClick={() => setHeroVideoMode('ambient')}
+        >
+          <div
+            className="w-full max-w-5xl rounded-2xl border border-white/20 bg-black overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 bg-slate-950 border-b border-white/10 flex items-center justify-between gap-2 text-white">
+              <div className="flex items-center gap-2">
+                <Play className="w-4 h-4 text-amber-400" />
+                <span className="font-hud font-bold text-sm">Level UP Teaser — Official Video</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHeroVideoMode('ambient')}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
+                aria-label={id ? 'Tutup pemutar video' : 'Close video player'}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="aspect-video bg-black">
+              <iframe
+                src={HERO_PLAYER_EMBED_URL}
+                title="Level UP Teaser Cinema"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+                className="w-full h-full border-0"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ===================================================================== */}
       {/* 2. 7 DEVELOPMENT DIMENSIONS & 6 PATHWAYS                              */}
@@ -525,39 +601,120 @@ export const LandingHomepage: React.FC<LandingHomepageProps> = ({ lang, onOpenAu
 
         <div className="rounded-2xl border border-stone-200 bg-white p-5 sm:p-7 shadow-xs">
           {activeShowcase === 'hud' && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-              <div className="rounded-xl border border-stone-200 bg-[#faf9f5] p-4 space-y-2">
-                <Flame className="w-5 h-5 text-amber-700" />
-                <h3 className="font-hud font-bold text-base text-slate-900">
-                  {id ? 'Daily Quests & Streak Disiplin' : 'Daily Quests & Habit Streaks'}
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  {id
-                    ? 'Streak terpisah untuk konsistensi Harian, Tugas, dan Workout, plus tangkap target harian otomatis ke To-Do List & integrasi Google Calendar.'
-                    : 'Dedicated Daily, Task, and Workout streaks, automatic morning target capture, and direct Google Calendar integration.'}
-                </p>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+              <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-3.5 text-xs">
+                <div className="rounded-xl border border-stone-200 bg-[#faf9f5] p-4 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Flame className="w-4 h-4 text-amber-700 shrink-0" />
+                    <h3 className="font-hud font-bold text-sm text-slate-900">
+                      {id ? 'Daily Quests & Streak Disiplin' : 'Daily Quests & Habit Streaks'}
+                    </h3>
+                  </div>
+                  <p className="text-slate-600 leading-relaxed">
+                    {id
+                      ? 'Streak terpisah untuk konsistensi Harian, Tugas, dan Workout, plus tangkap target harian otomatis ke To-Do List & integrasi Google Calendar.'
+                      : 'Dedicated Daily, Task, and Workout streaks, automatic morning target capture, and direct Google Calendar integration.'}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-stone-200 bg-[#faf9f5] p-4 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-sky-700 shrink-0" />
+                    <h3 className="font-hud font-bold text-sm text-slate-900">
+                      {id ? 'Jurnal Energi, Tidur & Nutrisi' : 'Energy, Sleep & Nutrition Journal'}
+                    </h3>
+                  </div>
+                  <p className="text-slate-600 leading-relaxed">
+                    {id
+                      ? 'Check-in pagi, siang, dan malam yang adaptif terhadap kondisi fisik, lengkap dengan Coach Karier, Gym Coach, dan Refleksi Harian.'
+                      : 'Morning, midday, and evening check-ins adapting workout & focus plans with Career Coach, Gym Coach, and Daily Reflection.'}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-stone-200 bg-[#faf9f5] p-4 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <h3 className="font-hud font-bold text-sm text-slate-900">
+                      {id ? 'Privasi Jurnal Pribadi Terjaga' : 'Owner-Only Private Journals'}
+                    </h3>
+                  </div>
+                  <p className="text-slate-600 leading-relaxed">
+                    {id
+                      ? 'Jurnal pribadi, mood, tidur, dan kalender bersifat privat milik peserta (Privacy by Default / UU PDP) dan tidak dibagikan otomatis.'
+                      : 'Private journals, mood, sleep logs, and personal calendar stay owner-only by default with explicit consent controls.'}
+                  </p>
+                </div>
               </div>
-              <div className="rounded-xl border border-stone-200 bg-[#faf9f5] p-4 space-y-2">
-                <Layers className="w-5 h-5 text-sky-700" />
-                <h3 className="font-hud font-bold text-base text-slate-900">
-                  {id ? 'Jurnal Energi, Tidur & Nutrisi' : 'Energy, Sleep & Nutrition Journal'}
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  {id
-                    ? 'Check-in pagi, siang, dan malam yang adaptif terhadap kondisi fisik, lengkap dengan Coach Karier, Gym Coach, dan Refleksi Harian.'
-                    : 'Morning, midday, and evening check-ins adapting workout & focus plans with Career Coach, Gym Coach, and Daily Reflection.'}
-                </p>
-              </div>
-              <div className="rounded-xl border border-stone-200 bg-[#faf9f5] p-4 space-y-2">
-                <ShieldCheck className="w-5 h-5 text-emerald-700" />
-                <h3 className="font-hud font-bold text-base text-slate-900">
-                  {id ? 'Privasi Jurnal Pribadi Terjaga' : 'Owner-Only Private Journals'}
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  {id
-                    ? 'Jurnal pribadi, mood, tidur, dan kalender bersifat privat milik peserta (Privacy by Default / UU PDP) dan tidak dibagikan otomatis.'
-                    : 'Private journals, mood, sleep logs, and personal calendar stay owner-only by default with explicit consent controls.'}
-                </p>
+
+              {/* Interactive Daily Quest Preview Card */}
+              <div className="lg:col-span-5 rounded-2xl border border-stone-300/90 bg-[#faf9f5] overflow-hidden">
+                <div className="px-4 py-2.5 bg-stone-100/90 border-b border-stone-200 flex items-center justify-between gap-2">
+                  <span className="font-mono text-[10px] font-bold text-slate-700">
+                    {id ? 'COBA DAILY QUESTS' : 'TRY DAILY QUESTS'}
+                  </span>
+                  <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-slate-900 text-amber-400">
+                    +{demoExp} EXP · +{demoCoins} KOIN
+                  </span>
+                </div>
+                <div className="p-4 space-y-3">
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[11px] font-semibold">
+                      <span className="text-slate-700">{id ? 'Klik tugas untuk simulasi:' : 'Toggle quests to preview:'}</span>
+                      <span className="font-mono text-amber-800 font-bold">
+                        {completedDemoCount}/{SAMPLE_QUESTS.length} ({demoPct}%)
+                      </span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-stone-200 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-amber-600 to-emerald-600 transition-all duration-300"
+                        style={{ width: `${demoPct}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {SAMPLE_QUESTS.map((q, idx) => {
+                      const done = Boolean(checkedQuests[idx]);
+                      return (
+                        <button
+                          key={q.time}
+                          type="button"
+                          onClick={() => toggleSampleQuest(idx)}
+                          className={`w-full text-left p-2 rounded-xl border transition flex items-start gap-2 ${
+                            done
+                              ? 'bg-emerald-50/70 border-emerald-300'
+                              : 'bg-white border-stone-200 hover:border-amber-400'
+                          }`}
+                        >
+                          <span
+                            className={`mt-0.5 w-4 h-4 rounded flex items-center justify-center border shrink-0 transition ${
+                              done ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-stone-400 text-transparent'
+                            }`}
+                          >
+                            <Check className="w-3 h-3" />
+                          </span>
+                          <div className="min-w-0 flex-grow">
+                            <div className="flex items-center justify-between gap-1 text-[10px] font-mono">
+                              <span className="font-bold text-amber-800">
+                                {q.time} · {id ? q.tagId : q.tagEn}
+                              </span>
+                              <span className="text-slate-500">+{q.xp} EXP</span>
+                            </div>
+                            <p className={`text-xs font-semibold mt-0.5 ${done ? 'line-through text-slate-500' : 'text-slate-900'}`}>
+                              {id ? q.titleId : q.titleEn}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onOpenAuth('register')}
+                    className="w-full py-2 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-hud font-bold text-[11px] uppercase tracking-wider transition"
+                  >
+                    {id ? 'Daftar untuk Menyimpan Progres →' : 'Register to Save Progress →'}
+                  </button>
+                </div>
               </div>
             </div>
           )}
