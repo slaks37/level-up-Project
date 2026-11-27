@@ -1211,9 +1211,35 @@ export default function App() {
     };
   }, []);
 
+  const CHECKIN_DAILY_PROMPT_STORAGE_KEY = 'levelup_daily_checkin_prompted_v1';
+  const hasPromptedCheckInOnDate = (ownerKey: string, dayKey: string): boolean => {
+    const composite = `${ownerKey}:${dayKey}`;
+    if (promptedCheckIns.current.has(composite)) return true;
+    try {
+      const raw = window.localStorage.getItem(CHECKIN_DAILY_PROMPT_STORAGE_KEY);
+      if (!raw) return false;
+      const map = JSON.parse(raw) as Record<string, string>;
+      return map[ownerKey] === dayKey;
+    } catch {
+      return false;
+    }
+  };
+  const markCheckInPromptedOnDate = (ownerKey: string, dayKey: string): void => {
+    promptedCheckIns.current.add(`${ownerKey}:${dayKey}`);
+    try {
+      const raw = window.localStorage.getItem(CHECKIN_DAILY_PROMPT_STORAGE_KEY);
+      const map = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+      map[ownerKey] = dayKey;
+      window.localStorage.setItem(CHECKIN_DAILY_PROMPT_STORAGE_KEY, JSON.stringify(map));
+    } catch {
+      // ignore storage quota / private mode restrictions
+    }
+  };
+
   const { dateKey, phase } = getJournalMoment(new Date(now));
-  const currentCheckInId = dateKey + '-' + phase;
-  const hasCheckIn = journal.records.some((entry) => entry.id === currentCheckInId);
+  const hasCheckInToday = journal.records.some(
+    (entry) => entry.dateKey === dateKey || entry.id.startsWith(`${dateKey}-`)
+  );
   const isPlayerReady = Boolean(player) && authResolved && !isAdminView && !showAuthScreen && journal.ready;
   const missingGym = Boolean(player && !player.gym);
   useEffect(() => {
@@ -1222,9 +1248,8 @@ export default function App() {
       return;
     }
     if (!isPlayerReady || modal) return;
-    const checkInKey = journal.key + ':' + currentCheckInId;
-    if (!hasCheckIn && !promptedCheckIns.current.has(checkInKey)) {
-      promptedCheckIns.current.add(checkInKey);
+    if (!hasCheckInToday && !hasPromptedCheckInOnDate(journal.key, dateKey)) {
+      markCheckInPromptedOnDate(journal.key, dateKey);
       setModal({ type: 'checkIn', dateKey, phase, owner: journal.key });
       return;
     }
@@ -1233,7 +1258,7 @@ export default function App() {
       promptedGym.current.add(gymKey);
       setModal({ type: 'coachSetup', section: 'gym' });
     }
-  }, [isPlayerReady, hasCheckIn, modal, journal.key, currentCheckInId, dateKey, phase, missingGym]);
+  }, [isPlayerReady, hasCheckInToday, modal, journal.key, dateKey, phase, missingGym]);
 
   // Keep Admin directory telemetry synced whenever participant profile/journal/logs update
   useEffect(() => {
@@ -1288,6 +1313,7 @@ export default function App() {
     const entry: CheckIn = { ...input, id: entryId,
       dateKey: modal.dateKey, phase: modal.phase, kind: 'checkin', updatedAt: Date.now() };
     journal.save(entry);
+    markCheckInPromptedOnDate(journal.key, modal.dateKey);
     setModal(null);
 
     const cfg = coinConfigRef.current;
