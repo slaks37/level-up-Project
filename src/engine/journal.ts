@@ -1,5 +1,14 @@
 import { getActiveDreamStep, getCurrentDreamSteps, getNextRoadmapAction } from './coaching';
-import type { DailyLogEntry, GrowthNewsItem, Language, PlayerProfile, QuestCategory, WorkoutFeedback } from '../types';
+import type {
+  DailyLogEntry,
+  GrowthNewsItem,
+  Language,
+  NutritionCondition,
+  PlayerProfile,
+  QuestCategory,
+  SleepCondition,
+  WorkoutFeedback,
+} from '../types';
 
 export type DayPhase = 'morning' | 'day' | 'evening';
 export type MealPattern = '' | 'skipped' | 'partial' | 'varied';
@@ -95,6 +104,41 @@ export function getDailyEvidence(entries: JournalEntry[], logs: DailyLogEntry[],
 }
 
 export type DailyEvidence = ReturnType<typeof getDailyEvidence>;
+
+/**
+ * Derives authoritative daily sleepCondition & nutritionCondition from today's journal evidence
+ * instead of persisting static profile defaults into dailyLogs.
+ */
+export function deriveWellnessConditions(
+  evidence: Pick<DailyEvidence, 'sleep' | 'shortSleep' | 'meal' | 'mealGroups'>,
+  fallbackSleep: SleepCondition = 'moderate',
+  fallbackNutrition: NutritionCondition = 'balanced'
+): { sleepCondition: SleepCondition; nutritionCondition: NutritionCondition } {
+  let sleepCondition: SleepCondition = fallbackSleep;
+  if (evidence.sleep !== null) {
+    if (evidence.shortSleep || evidence.sleep < 6) {
+      sleepCondition = 'poor';
+    } else if (evidence.sleep >= 7.5 && evidence.sleep <= 9.5) {
+      sleepCondition = 'optimal';
+    } else {
+      sleepCondition = 'moderate';
+    }
+  }
+
+  let nutritionCondition: NutritionCondition = fallbackNutrition;
+  const groups = evidence.mealGroups || [];
+  if (evidence.meal === 'skipped') {
+    nutritionCondition = 'deficit';
+  } else if (evidence.meal === 'varied' && groups.includes('protein') && groups.length >= 3) {
+    nutritionCondition = 'high_protein';
+  } else if (evidence.meal === 'varied' || evidence.meal === 'partial') {
+    nutritionCondition = 'balanced';
+  } else if (groups.includes('protein') && groups.length >= 2) {
+    nutritionCondition = 'high_protein';
+  }
+
+  return { sleepCondition, nutritionCondition };
+}
 
 export function getGrowthActions(player: PlayerProfile, logs: DailyLogEntry[], entries: JournalEntry[], evidence: DailyEvidence, lang: Language): GrowthNewsItem[] {
   const id = lang === 'id';

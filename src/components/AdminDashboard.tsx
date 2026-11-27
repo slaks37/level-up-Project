@@ -40,9 +40,11 @@ import {
   fetchAdminAISecret,
   fetchAdminUsageLogs,
   fetchAllUsersForAdmin,
+  fetchAppFeatureFlags,
   fetchCoinEconomyConfig,
   fetchCoinPartnerSecret,
   fetchParticipantFullRecord,
+  saveAppFeatureFlags,
   fetchSharedAIPublicConfig,
   reloadCurrentUser,
   resetUserDailyQuota,
@@ -54,7 +56,9 @@ import {
   type ParticipantFullRecord,
 } from '../services/firebaseService';
 import { DEFAULT_COIN_ECONOMY } from '../engine/science';
+import { DEFAULT_FEATURE_FLAGS, type FeatureFlagsConfig } from '../services/featureFlags';
 import { AdminParticipantInspector } from './AdminParticipantInspector';
+import { MentorReviewPanel } from './MentorReviewPanel';
 import {
   AGNES_PRESET_MODELS,
   checkProxyServerHealth,
@@ -150,6 +154,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Coin Economy & Partner (MyValue) Config state
   const [coinConfig, setCoinConfig] = useState<CoinEconomyConfig>({ ...DEFAULT_COIN_ECONOMY });
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlagsConfig>({ ...DEFAULT_FEATURE_FLAGS });
+  const [cohortAllowlistInput, setCohortAllowlistInput] = useState('');
+  const [savingFlags, setSavingFlags] = useState(false);
   const [partnerMerchantId, setPartnerMerchantId] = useState('');
   const [partnerApiKey, setPartnerApiKey] = useState('');
   const [partnerWebhookSecret, setPartnerWebhookSecret] = useState('');
@@ -187,7 +194,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     try {
       const errors: string[] = [];
-      const [pub, secret, allUsers, fsLogs, health, coinCfg, partnerSec] = await Promise.all([
+      const [pub, secret, allUsers, fsLogs, health, coinCfg, partnerSec, flagsCfg] = await Promise.all([
         fetchSharedAIPublicConfig().catch((e) => {
           errors.push(`appConfig: ${e instanceof Error ? e.message : String(e)}`);
           return null;
@@ -204,6 +211,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         checkProxyServerHealth(localProxyUrl).catch(() => null),
         fetchCoinEconomyConfig().catch(() => ({ ...DEFAULT_COIN_ECONOMY })),
         canConfigure ? fetchCoinPartnerSecret().catch(() => null) : Promise.resolve(null),
+        fetchAppFeatureFlags().catch(() => ({ ...DEFAULT_FEATURE_FLAGS })),
       ]);
       if (errors.length > 0) setLoadError(errors.join(' | '));
 
@@ -211,6 +219,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setUsers(allUsers);
       setProxyHealth(health);
       setCoinConfig(coinCfg);
+      setFeatureFlags(flagsCfg);
+      setCohortAllowlistInput(flagsCfg.cohortAllowlist.join(', '));
       if (partnerSec) {
         setPartnerMerchantId(partnerSec.merchantId || '');
         setPartnerApiKey(partnerSec.apiKey || '');
@@ -1444,6 +1454,141 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
           </form>
+        </section>
+      )}
+
+      {/* LEVELUP ACADEMY COURSE MANAGEMENT & MENTOR REVIEW QUEUE (STAGE 7) */}
+      {canConfigure && cloudUser && (
+        <MentorReviewPanel cloudUser={cloudUser} lang={lang} onNotify={onNotify} />
+      )}
+
+      {/* LEVELUP 2.0 FEATURE FLAGS ROLLOUT CONTROL */}
+      {canConfigure && cloudUser && (
+        <section className="anime-panel overflow-hidden border border-sky-200">
+          <div className="blender-bar px-4 py-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="font-mono text-[10px] font-bold text-slate-800 flex items-center gap-1.5">
+              <Shield className="w-3.5 h-3.5 text-sky-600" />
+              {lang === 'id'
+                ? 'LEVELUP 2.0 · FEATURE FLAGS & PROGRESSIVE ROLLOUT'
+                : 'LEVELUP 2.0 · FEATURE FLAGS & PROGRESSIVE ROLLOUT'}
+            </span>
+            <span className="font-mono text-[9px] font-bold px-2 py-0.5 rounded bg-slate-900 text-orange-400">
+              appConfig/featureFlags
+            </span>
+          </div>
+
+          <div className="p-4 space-y-3 text-xs">
+            <p className="rounded border border-sky-200 bg-sky-50 p-2.5 text-sky-950 text-[11px]">
+              {lang === 'id'
+                ? 'Aktifkan modul LevelUp 2.0 secara bertahap tanpa redeploy. Tambahkan "__staff__" pada daftar kohort pilot untuk uji coba internal admin terlebih dahulu.'
+                : 'Enable LevelUp 2.0 modules progressively without redeploying. Add "__staff__" to the pilot cohort allowlist to preview internally first.'}
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+              {(
+                [
+                  ['awakeningV2', 'Awakening 2.0', 'Upgrade opt-in & purpose'],
+                  ['pathways', '6 Pathways & 7 Dimensi', 'Termasuk Sociopreneur 10 tahap'],
+                  ['academy', 'LevelUp Academy', 'LMS terintegrasi (Phase 2)'],
+                  ['businessStudio', 'Business Studio', '16 tools usaha (Phase 3)'],
+                  ['agnesV2', 'Agnes AI 2.0', '10 mode copilot (Phase 4)'],
+                  ['ecosystemSync', 'Ecosystem Sync', 'API Sociopreneur.online (Phase 4)'],
+                  ['serverWallet', 'Server Wallet', 'Ledger server-side (Phase 5)'],
+                ] as const
+              ).map(([key, title, desc]) => (
+                <label
+                  key={key}
+                  className="flex items-start justify-between gap-2 p-2.5 rounded border border-slate-200 bg-slate-50 cursor-pointer hover:border-sky-300"
+                >
+                  <div className="min-w-0">
+                    <span className="font-bold text-slate-900 block">{title}</span>
+                    <span className="text-[10px] text-slate-600">{desc}</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={featureFlags[key]}
+                    onChange={(e) =>
+                      setFeatureFlags((prev) => ({
+                        ...prev,
+                        [key]: e.target.checked,
+                        ...(key === 'serverWallet' && !e.target.checked ? { myValueRedemption: false } : {}),
+                      }))
+                    }
+                    className="mt-0.5 h-4 w-4 accent-sky-600 shrink-0"
+                  />
+                </label>
+              ))}
+
+              <div className="flex items-start justify-between gap-2 p-2.5 rounded border border-rose-200 bg-rose-50/70">
+                <div className="min-w-0">
+                  <span className="font-bold text-rose-950 block">MyValue Redemption</span>
+                  <span className="text-[10px] text-rose-800">
+                    {featureFlags.serverWallet
+                      ? 'Phase 5 — hanya aktif setelah 10 Gate lulus'
+                      : 'TERKUNCI · Wajib Server Wallet + Audit Phase 5'}
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  disabled={!featureFlags.serverWallet}
+                  checked={featureFlags.serverWallet && featureFlags.myValueRedemption}
+                  onChange={(e) =>
+                    setFeatureFlags((prev) => ({
+                      ...prev,
+                      myValueRedemption: prev.serverWallet && e.target.checked,
+                    }))
+                  }
+                  className="mt-0.5 h-4 w-4 accent-rose-600 shrink-0 disabled:opacity-40"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-end">
+              <label className="flex-grow space-y-1 font-bold text-slate-700">
+                <span>{lang === 'id' ? 'Pilot Cohort Allowlist (pisah koma, mis. __staff__, coh_batch1)' : 'Pilot Cohort Allowlist (comma-separated)'}</span>
+                <input
+                  type="text"
+                  value={cohortAllowlistInput}
+                  onChange={(e) => setCohortAllowlistInput(e.target.value)}
+                  placeholder="__staff__, coh_2026_pilot"
+                  className="w-full px-2.5 py-1.5 rounded border border-slate-300 font-mono text-xs font-normal"
+                />
+              </label>
+              <button
+                type="button"
+                disabled={savingFlags}
+                onClick={async () => {
+                  setSavingFlags(true);
+                  try {
+                    const allowlist = cohortAllowlistInput
+                      .split(',')
+                      .map((s) => s.trim())
+                      .filter(Boolean)
+                      .slice(0, 100);
+                    const saved = await saveAppFeatureFlags(cloudUser, {
+                      ...featureFlags,
+                      cohortAllowlist: allowlist,
+                    });
+                    setFeatureFlags(saved);
+                    onNotify(
+                      lang === 'id'
+                        ? 'Feature Flags LevelUp 2.0 berhasil disimpan!'
+                        : 'LevelUp 2.0 Feature Flags saved!',
+                      'success'
+                    );
+                  } catch (err) {
+                    onNotify(err instanceof Error ? err.message : String(err), 'error');
+                  } finally {
+                    setSavingFlags(false);
+                  }
+                }}
+                className="py-2 px-4 rounded bg-slate-900 hover:bg-sky-700 disabled:opacity-60 text-white font-hud font-bold text-xs uppercase flex items-center justify-center gap-1.5 btn-anime shrink-0"
+              >
+                {savingFlags ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                <span>{lang === 'id' ? 'SIMPAN FEATURE FLAGS' : 'SAVE FEATURE FLAGS'}</span>
+              </button>
+            </div>
+          </div>
         </section>
       )}
     </section>

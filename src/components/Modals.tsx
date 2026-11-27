@@ -1,4 +1,5 @@
 import { getActiveDreamStep } from '../engine/coaching';
+import { DEVELOPMENT_DIMENSIONS, type DevelopmentDimension } from '../engine/v2/dimensions';
 import React, { useId, useMemo, useState } from 'react';
 import {
   Activity,
@@ -545,6 +546,7 @@ export const AddQuestModal: React.FC<{
 }> = ({ player, lang, onAdd, onClose }) => {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<QuestCategory>('CAREER');
+  const [dimension, setDimension] = useState<DevelopmentDimension>('CAREER');
   const [unitType, setUnitType] = useState<QuestUnitType>('MINUTES');
   const [defaultQty, setDefaultQty] = useState(45);
   const [skillTag, setSkillTag] = useState('');
@@ -564,6 +566,7 @@ export const AddQuestModal: React.FC<{
             id: `custom_q_${Date.now()}`,
             title: title.trim(),
             category,
+            dimension,
             unitType,
             defaultQty: Math.max(5, defaultQty),
             estMinutes: unitType === 'REPS' ? 20 : Math.max(5, defaultQty),
@@ -601,7 +604,11 @@ export const AddQuestModal: React.FC<{
             </label>
             <select
               value={category}
-              onChange={(e) => setCategory(e.target.value as QuestCategory)}
+              onChange={(e) => {
+                const nextCat = e.target.value as QuestCategory;
+                setCategory(nextCat);
+                setDimension(nextCat === 'FITNESS' ? 'HEALTH' : nextCat === 'STUDY' ? 'SKILLS' : 'CAREER');
+              }}
               className="w-full px-2.5 py-2 rounded border border-slate-300 text-xs font-bold"
             >
               <option value="STUDY">{lang === 'id' ? 'Belajar' : 'Study'}</option>
@@ -633,6 +640,23 @@ export const AddQuestModal: React.FC<{
               className="w-full px-2.5 py-2 rounded border border-slate-300 font-mono text-sm"
             />
           </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold text-slate-700 mb-1">
+            {lang === 'id' ? 'Dimensi Pengembangan (LevelUp 2.0)' : 'Development Dimension (LevelUp 2.0)'}
+          </label>
+          <select
+            value={dimension}
+            onChange={(e) => setDimension(e.target.value as DevelopmentDimension)}
+            className="w-full px-2.5 py-2 rounded border border-slate-300 text-xs font-semibold bg-white"
+          >
+            {DEVELOPMENT_DIMENSIONS.map((d) => (
+              <option key={d.id} value={d.id}>
+                {lang === 'id' ? `${d.labelId} — ${d.shortDescId}` : `${d.labelEn} — ${d.shortDescEn}`}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div>

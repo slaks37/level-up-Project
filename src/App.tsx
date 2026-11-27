@@ -1,5 +1,5 @@
 import type { AdminRole } from './engine/access';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import type {
   AIConfig,
@@ -19,7 +19,6 @@ import type {
   QuestFilter,
   SharedAIPublicConfig,
   SyncStatus,
-  ToastItem,
 } from './types';
 import {
   advanceStreakCounter,
@@ -55,35 +54,55 @@ import {
   deleteProfileFromCloud,
   fetchCoinTransactions,
   fetchRecentDailyLogs,
+  fetchUserEvidenceRecords,
   initFirebaseFromConfig,
   initializeCloudProfile,
   isFirebaseReady,
   recordCoinTransaction,
   saveCalendarSummaryToCloud,
   saveDailyLogToCloud,
+  saveEvidenceRecordToCloud,
   saveProfileToCloud,
+  saveUserPrivacySettings,
+  subscribeAppFeatureFlags,
   subscribeAuth,
   subscribeCoinEconomyConfig,
   subscribeProfileFromCloud,
   subscribeSharedAIPublicConfig,
+  subscribeUserPrivacySettings,
   syncUserTelemetrySummary,
   upsertUserMeta,
   watchAdminAccess,
 } from './services/firebaseService';
+import { DEFAULT_FEATURE_FLAGS, isFeatureEnabled, type FeatureFlagsConfig } from './services/featureFlags';
+import type { UserPrivacySettings } from './engine/v2/privacy';
+import { loadLocalPrivacySettings, saveLocalPrivacySettings } from './services/privacyStorage';
+import { createPathwayDreamSteps } from './engine/v2/pathways';
+import type { DevelopmentDimension } from './engine/v2/dimensions';
+import {
+  loadLocalEvidence,
+  saveLocalEvidence,
+  type EvidenceRecord,
+  type EvidenceTargetType,
+} from './engine/v2/evidence';
+import type { StudioCanvasId } from './engine/v2/businessStudio';
+import { DimensionsHudPanel } from './components/DimensionsHudPanel';
+import type { AwakeningV2Result } from './components/AwakeningV2Modal';
 import { splitRoadmapTasks } from './services/aiService';
 import { Header } from './components/Header';
 import { MobileNav } from './components/MobileNav';
 import { AuthView } from './components/AuthView';
-import { AdminDashboard } from './components/AdminDashboard';
 import { AwakeningView } from './components/AwakeningView';
 import { buildCapturedTargetPlan, getActiveDreamStep, getCurrentDreamSteps, getRoadmapActions, planDailyFocus, type DailyTaskSuggestion } from './engine/coaching';
 import type { CalendarEvent } from './services/googleCalendar';
 import { CareerCoach, CoachSetupModal, GymCoach } from './components/CoachPanels';
 import { BodyConditionPanel, DailyCheckInModal, DailyReflectionCard, NutritionPanel, type CheckInCaptureOptions } from './components/JournalPanels';
-import { getDailyEvidence, getGrowthActions, getJournalMoment, mergeJournal, type CheckIn, type CheckInInput, type DayPhase } from './engine/journal';
+import { deriveWellnessConditions, getDailyEvidence, getGrowthActions, getJournalMoment, mergeJournal, type CheckIn, type CheckInInput, type DayPhase } from './engine/journal';
 import { createDailyReflection } from './engine/reflection';
 import { loadGuestJournal, useJournal } from './services/useJournal';
 import { avatarOwnerKey, deleteAvatarPhoto } from './services/avatarStorage';
+import { useToasts } from './hooks/useToasts';
+import { usePwaInstall } from './hooks/usePwaInstall';
 import {
   DailyTasksPanel,
   DreamRoadmapPanel,
@@ -103,19 +122,45 @@ import {
   ResetConfirmModal,
   ScienceModal,
 } from './components/Modals';
-import { SettingsModal } from './components/SettingsModal';
 import { ToastContainer } from './components/ToastContainer';
 import { ADMIN_HOST, ADMIN_URL, isAdminPath, PUBLIC_HOST, PUBLIC_URL } from './routes';
 
-interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
-}
+const AdminDashboard = lazy(() =>
+  import('./components/AdminDashboard').then((module) => ({ default: module.AdminDashboard }))
+);
+const SettingsModal = lazy(() =>
+  import('./components/SettingsModal').then((module) => ({ default: module.SettingsModal }))
+);
+const AwakeningV2Modal = lazy(() =>
+  import('./components/AwakeningV2Modal').then((module) => ({ default: module.AwakeningV2Modal }))
+);
+const EvidenceModal = lazy(() =>
+  import('./components/EvidenceModal').then((module) => ({ default: module.EvidenceModal }))
+);
+const AcademyWorkspace = lazy(() =>
+  import('./components/AcademyWorkspace').then((module) => ({ default: module.AcademyWorkspace }))
+);
+const BusinessStudioWorkspace = lazy(() =>
+  import('./components/BusinessStudioWorkspace').then((module) => ({ default: module.BusinessStudioWorkspace }))
+);
+const AgnesCopilotWorkspace = lazy(() =>
+  import('./components/AgnesCopilotWorkspace').then((module) => ({ default: module.AgnesCopilotWorkspace }))
+);
+
+type ActiveWorkspace = 'today' | 'academy' | 'studio' | 'agnes';
 
 type ActiveModal =
   | null
   | { type: 'science' }
-  | { type: 'settings'; tab: 'ai' | 'cloud' | 'app' }
+  | { type: 'settings'; tab: 'ai' | 'cloud' | 'privacy' | 'app' }
+  | { type: 'awakeningV2' }
+  | {
+      type: 'evidence';
+      dimension: DevelopmentDimension;
+      targetType: EvidenceTargetType;
+      targetId: string;
+      title: string;
+    }
   | { type: 'reset' }
   | { type: 'editBio' }
   | { type: 'coachSetup'; section: 'career' | 'gym' }
@@ -150,11 +195,10 @@ export default function App() {
   const [mobileTab, setMobileTab] = useState<MobileTab>('status');
   const [questFilter, setQuestFilter] = useState<QuestFilter>('ALL');
   const [modal, setModal] = useState<ActiveModal>(null);
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const { toasts, notify } = useToasts();
 
-  // Auth / Admin / Routing States
+  // Auth / Admin / Routing States (Direct Online Account Required — no guest/offline bypass)
   const [authResolved, setAuthResolved] = useState(false);
-  const [guestMode, setGuestMode] = useState<boolean>(() => Boolean(loadLocalPlayer('id')));
   const [showAuthScreen, setShowAuthScreen] = useState(false);
   const [isAdminView, setIsAdminView] = useState<boolean>(
     () => isDedicatedAdminHost || isAdminPath(window.location.pathname)
@@ -164,6 +208,11 @@ export default function App() {
   const isAdmin = Boolean(adminRole);
   const [isUnverifiedBootstrapAdmin, setIsUnverifiedBootstrapAdmin] = useState(false);
   const [sharedAIConfig, setSharedAIConfig] = useState<SharedAIPublicConfig | null>(null);
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlagsConfig>(() => ({ ...DEFAULT_FEATURE_FLAGS }));
+  const [privacySettings, setPrivacySettings] = useState<UserPrivacySettings>(() => loadLocalPrivacySettings());
+  const [activeWorkspace, setActiveWorkspace] = useState<ActiveWorkspace>('today');
+  const [studioInitialTool, setStudioInitialTool] = useState<StudioCanvasId | undefined>(undefined);
+  const [evidenceList, setEvidenceList] = useState<EvidenceRecord[]>(() => loadLocalEvidence());
   const [coinConfig, setCoinConfig] = useState<CoinEconomyConfig>(() => ({ ...DEFAULT_COIN_ECONOMY }));
   const [coinTransactions, setCoinTransactions] = useState<CoinTransactionRecord[]>([]);
   const coinConfigRef = useRef<CoinEconomyConfig>(coinConfig);
@@ -181,9 +230,6 @@ export default function App() {
   const [cloudProfileReady, setCloudProfileReady] = useState(false);
   const [savingNewProfile, setSavingNewProfile] = useState(false);
 
-  // PWA Install Prompt
-  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-
   // Refs for clean async sync without echo loops
   const playerRef = useRef<PlayerProfile | null>(player);
   playerRef.current = player;
@@ -193,16 +239,8 @@ export default function App() {
   cloudUserRef.current = cloudUser;
   const profileWrite = useRef(0);
 
-  const notify = useCallback(
-    (message: string, type: ToastItem['type'] = 'info') => {
-      const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-      setToasts((prev) => [...prev.slice(-3), { id, message, type }]);
-      window.setTimeout(() => {
-        setToasts((prev) => prev.filter((item) => item.id !== id));
-      }, 3600);
-    },
-    []
-  );
+  // PWA Install Prompt
+  const { installPrompt, handleInstallPWA } = usePwaInstall(langRef, notify);
 
   // Browser back/forward sync for the legacy /admin route.
   useEffect(() => {
@@ -229,29 +267,6 @@ export default function App() {
       window.history.pushState({}, '', targetPath);
     }
   };
-
-  // Listen for PWA installability
-  useEffect(() => {
-    const handleBeforeInstall = (e: Event) => {
-      e.preventDefault();
-      setInstallPrompt(e as BeforeInstallPromptEvent);
-    };
-    const handleAppInstalled = () => {
-      setInstallPrompt(null);
-      notify(
-        langRef.current === 'id'
-          ? 'LEVEL UP SYSTEM berhasil terpasang sebagai aplikasi!'
-          : 'LEVEL UP SYSTEM installed as an app!',
-        'success'
-      );
-    };
-    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
-    window.addEventListener('appinstalled', handleAppInstalled);
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
-      window.removeEventListener('appinstalled', handleAppInstalled);
-    };
-  }, [notify]);
 
   // Online / Offline indicator
   useEffect(() => {
@@ -332,6 +347,8 @@ export default function App() {
     let unsubProfile: (() => void) | null = null;
     let unsubSharedAI: (() => void) | null = null;
     let unsubCoinEconomy: (() => void) | null = null;
+    let unsubFeatureFlags: (() => void) | null = null;
+    let unsubPrivacy: (() => void) | null = null;
     let unsubRole: (() => void) | null = null;
     let cancelled = false;
     let activeUid: string | undefined;
@@ -390,11 +407,23 @@ export default function App() {
           unsubCoinEconomy();
           unsubCoinEconomy = null;
         }
+        if (unsubFeatureFlags) {
+          unsubFeatureFlags();
+          unsubFeatureFlags = null;
+        }
+        if (unsubPrivacy) {
+          unsubPrivacy();
+          unsubPrivacy = null;
+        }
 
         if (!user) {
           setAdminRole(null);
           setIsUnverifiedBootstrapAdmin(false);
           setSharedAIConfig(null);
+          setFeatureFlags({ ...DEFAULT_FEATURE_FLAGS });
+          setPrivacySettings(loadLocalPrivacySettings());
+          setEvidenceList(loadLocalEvidence());
+          setActiveWorkspace('today');
           setCoinConfig({ ...DEFAULT_COIN_ECONOMY });
           setSyncStatus('local');
           return;
@@ -417,12 +446,31 @@ export default function App() {
           });
         });
 
-        // Subscribe to Admin-configured Shared AI public status & Coin Economy
+        // Subscribe to Admin-configured Shared AI public status, Coin Economy, Feature Flags & Privacy
         unsubSharedAI = subscribeSharedAIPublicConfig((cfg) => {
           if (!cancelled) setSharedAIConfig(cfg);
         });
         unsubCoinEconomy = subscribeCoinEconomyConfig((cfg) => {
           if (!cancelled) setCoinConfig(cfg);
+        });
+        unsubFeatureFlags = subscribeAppFeatureFlags((flags) => {
+          if (!cancelled) setFeatureFlags(flags);
+        });
+        setPrivacySettings(loadLocalPrivacySettings(user.uid));
+        setEvidenceList(loadLocalEvidence(user.uid));
+        void fetchUserEvidenceRecords(user.uid, 80)
+          .then((cloudEv) => {
+            if (!cancelled && activeUid === user.uid && cloudEv.length > 0) {
+              setEvidenceList(cloudEv);
+              saveLocalEvidence(cloudEv, user.uid);
+            }
+          })
+          .catch(() => {});
+        unsubPrivacy = subscribeUserPrivacySettings(user.uid, (settings) => {
+          if (!cancelled && activeUid === user.uid) {
+            setPrivacySettings(settings);
+            saveLocalPrivacySettings(settings, user.uid);
+          }
         });
 
         void fetchCoinTransactions(user.uid, 30)
@@ -475,6 +523,8 @@ export default function App() {
       if (unsubProfile) unsubProfile();
       if (unsubSharedAI) unsubSharedAI();
       if (unsubCoinEconomy) unsubCoinEconomy();
+      if (unsubFeatureFlags) unsubFeatureFlags();
+      if (unsubPrivacy) unsubPrivacy();
       unsubRole?.();
     };
   }, [firebaseVersion]);
@@ -498,13 +548,6 @@ export default function App() {
     if (cloudUser) {
       void upsertUserMeta(cloudUser, nextLang, adminRole).catch(() => {});
     }
-  };
-
-  const handleInstallPWA = async () => {
-    if (!installPrompt) return;
-    await installPrompt.prompt();
-    await installPrompt.userChoice;
-    setInstallPrompt(null);
   };
 
   const hasTaskBreakdown = Boolean(aiConfig.apiKey.trim() || (cloudUser && sharedAIConfig?.enabled !== false &&
@@ -827,6 +870,13 @@ export default function App() {
     const bonusExp = qualifiesBonus && !alreadyClaimedToday ? 15 : 0;
     const bonusGold = qualifiesBonus && !alreadyClaimedToday ? Math.max(0, Math.round(cfg.pointPerDayClear)) : 0;
 
+    const todayEvidence = getDailyEvidence(journal.records, dailyLogs, todayKey, player.age);
+    const { sleepCondition, nutritionCondition } = deriveWellnessConditions(
+      todayEvidence,
+      player.sleepCondition,
+      player.nutritionCondition
+    );
+
     const logEntry: DailyLogEntry = {
       dateKey: todayKey,
       completedTasks: completedCount,
@@ -837,8 +887,8 @@ export default function App() {
       expEarned: bonusExp,
       goldEarned: bonusGold,
       streakAfter: nextStreak,
-      sleepCondition: player.sleepCondition,
-      nutritionCondition: player.nutritionCondition,
+      sleepCondition,
+      nutritionCondition,
     };
 
     const nextLogs = [
@@ -866,6 +916,8 @@ export default function App() {
       streak: nextStreak,
       longestStreak: streakRes.longest,
       lastActiveStreakDate: streakRes.lastDate,
+      sleepCondition,
+      nutritionCondition,
       gold: player.gold + bonusGold,
       dailyDurationLog: { study: 0, work: 0, fitness: 0 },
       quests: refreshedQuests,
@@ -973,6 +1025,87 @@ export default function App() {
   const handleSaveAIConfig = (cfg: AIConfig) => {
     setAIConfig(cfg);
     saveAIConfig(cfg);
+  };
+
+  const handleSavePrivacySettings = async (next: UserPrivacySettings) => {
+    const uid = cloudUserRef.current?.uid;
+    setPrivacySettings(next);
+    saveLocalPrivacySettings(next, uid);
+    if (uid) {
+      await saveUserPrivacySettings(uid, next);
+    }
+  };
+
+  const handleSubmitEvidence = async (record: EvidenceRecord) => {
+    const uid = cloudUserRef.current?.uid;
+    setEvidenceList((prev) => {
+      const next = [record, ...prev.filter((item) => item.id !== record.id)].slice(0, 200);
+      saveLocalEvidence(next, uid);
+      return next;
+    });
+    if (uid) {
+      await saveEvidenceRecordToCloud(uid, record).catch(() => {});
+    }
+    if (record.targetType === 'dream_step' && playerRef.current) {
+      const cur = playerRef.current;
+      commitPlayerChange({
+        ...cur,
+        dreamSteps: cur.dreamSteps.map((s) =>
+          s.id === record.targetId ? { ...s, evidenceStatus: record.reviewStatus === 'submitted' ? 'submitted' : 'none' } : s
+        ),
+      });
+    }
+    playSFX('quest');
+    notify(
+      lang === 'id'
+        ? record.reviewStatus === 'submitted'
+          ? 'Bukti nyata terkirim ke Evidence Vault & antrean tinjauan Mentor!'
+          : 'Draft bukti disimpan ke Evidence Vault.'
+        : record.reviewStatus === 'submitted'
+          ? 'Real-world proof submitted to Evidence Vault & Mentor review queue!'
+          : 'Evidence draft saved.',
+      'success'
+    );
+  };
+
+  const handleSaveAwakeningV2 = (result: AwakeningV2Result) => {
+    if (!player) return;
+    let nextDreamSteps = player.dreamSteps;
+    if (result.applyPathwayRoadmap) {
+      const archived = player.dreamSteps
+        .filter((s) => s.completed || s.completedMinutes > 0 || (s.completedActions?.length ?? 0) > 0)
+        .slice(0, 35)
+        .map((s) => ({ ...s, archived: true }));
+      const freshSteps = createPathwayDreamSteps(
+        result.pathwayId,
+        player.goal,
+        player.profession,
+        player.targetLevel,
+        player.dailyBreakdown,
+        lang
+      ).map((step) => ({ ...step, id: `v2_${result.pathwayId}_${crypto.randomUUID().slice(0, 8)}` }));
+      nextDreamSteps = [...freshSteps, ...archived].slice(0, 50);
+    }
+
+    commitPlayerChange({
+      ...player,
+      schemaVersion: 4,
+      pathwayId: result.pathwayId,
+      purposeStatement: result.purposeStatement || undefined,
+      awakeningV2Completed: true,
+      availableResources: result.availableResources,
+      preferredActiveDays: result.preferredActiveDays,
+      skillSelfRatings: result.skillSelfRatings,
+      dreamSteps: nextDreamSteps,
+    });
+    setModal(null);
+    playSFX('levelup');
+    notify(
+      lang === 'id'
+        ? 'Awakening 2.0 tersimpan! Jalur pengembangan aktif tanpa menghapus progres lamamu.'
+        : 'Awakening 2.0 saved! Pathway activated while preserving all prior progress.',
+      'success'
+    );
   };
 
   const handleSaveFirebaseConfig = async (cfg: FirebaseRuntimeConfig | null) => {
@@ -1101,7 +1234,7 @@ export default function App() {
   // Keep Admin directory telemetry synced whenever participant profile/journal/logs update
   useEffect(() => {
     if (!cloudUser || !player || isAdminView || !cloudProfileReady) return;
-    const summary = buildUserTelemetrySummary(player, journal.records, dailyLogs, dateKey);
+    const summary = buildUserTelemetrySummary(player, journal.records, dailyLogs, dateKey, privacySettings);
     const sig = JSON.stringify({ ...summary, updatedAt: 0 });
     if (sig === lastTelemetrySig.current) return;
     const timer = window.setTimeout(() => {
@@ -1109,7 +1242,7 @@ export default function App() {
       void syncUserTelemetrySummary(cloudUser.uid, summary).catch(() => {});
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [cloudUser, player, journal.records, dailyLogs, dateKey, isAdminView, cloudProfileReady]);
+  }, [cloudUser, player, journal.records, dailyLogs, dateKey, isAdminView, cloudProfileReady, privacySettings]);
 
   const evidence = getDailyEvidence(journal.records, dailyLogs, dateKey, player?.age ?? 18);
   const calendarEvents = agenda?.owner === journal.key ? agenda.events : [];
@@ -1221,14 +1354,13 @@ export default function App() {
   const canAccessAdmin = isAdmin || isUnverifiedBootstrapAdmin;
   const pendingTasksCount = player ? player.quests.filter((q) => !q.completed).length : 0;
 
-  // Determine whether to show Auth Gate screen
+  // Direct login required whenever Firebase is active (no offline guest trial bypass)
   const awaitingCloudProfile = Boolean(cloudUser && !isAdminView && !player && !cloudProfileReady);
   const availableDeviceProfile = cloudUser && cloudProfileReady && !player ? loadLocalPlayer(lang) : null;
   const shouldShowAuthGate =
     isFirebaseReady() &&
     authResolved &&
-    !cloudUser &&
-    (showAuthScreen || isAdminView || (!guestMode && !player));
+    !cloudUser;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -1274,13 +1406,9 @@ export default function App() {
             lang={lang}
             adminOnly={isAdminView}
             onExit={() => {
-              if (isDedicatedAdminHost) {
+              if (isDedicatedAdminHost || isAdminView) {
                 navigateAdminView(false);
-                return;
               }
-              setGuestMode(true);
-              setShowAuthScreen(false);
-              if (isAdminView) navigateAdminView(false);
             }}
             onNotify={notify}
           />
@@ -1289,18 +1417,29 @@ export default function App() {
             {lang === 'id' ? 'Memeriksa izin admin…' : 'Checking admin access…'}
           </p>
         ) : isAdminView ? (
-          <AdminDashboard
-            lang={lang}
-            cloudUser={cloudUser}
-            adminRole={adminRole}
-            isUnverifiedBootstrapAdmin={isUnverifiedBootstrapAdmin}
-            proxyBaseUrl={aiConfig.proxyBaseUrl || ''}
-            onSaveProxyBaseUrl={(url) =>
-              handleSaveAIConfig({ ...aiConfig, proxyBaseUrl: url })
+          <Suspense
+            fallback={
+              <div className="max-w-md mx-auto py-16 text-center space-y-2">
+                <div className="w-8 h-8 border-2 border-sky-600 border-t-transparent rounded-full animate-spin mx-auto" />
+                <p className="font-mono text-xs text-slate-600">
+                  {lang === 'id' ? 'Memuat Admin Control Center...' : 'Loading Admin Control Center...'}
+                </p>
+              </div>
             }
-            onBackToApp={() => navigateAdminView(false)}
-            onNotify={notify}
-          />
+          >
+            <AdminDashboard
+              lang={lang}
+              cloudUser={cloudUser}
+              adminRole={adminRole}
+              isUnverifiedBootstrapAdmin={isUnverifiedBootstrapAdmin}
+              proxyBaseUrl={aiConfig.proxyBaseUrl || ''}
+              onSaveProxyBaseUrl={(url) =>
+                handleSaveAIConfig({ ...aiConfig, proxyBaseUrl: url })
+              }
+              onBackToApp={() => navigateAdminView(false)}
+              onNotify={notify}
+            />
+          </Suspense>
         ) : awaitingCloudProfile || savingNewProfile ? (
           <section role="status" className="anime-panel mx-auto max-w-md space-y-3 p-5 text-center">
             <p className="font-bold">{syncStatus === 'error'
@@ -1331,12 +1470,133 @@ export default function App() {
           </div>
         ) : (
           <section className="space-y-5">
+            {(() => {
+              const academyOn = isFeatureEnabled(featureFlags, 'academy', { isInternalStaff: isAdmin });
+              const studioOn = isFeatureEnabled(featureFlags, 'businessStudio', { isInternalStaff: isAdmin });
+              const agnesV2On = isFeatureEnabled(featureFlags, 'agnesV2', { isInternalStaff: isAdmin });
+              if (!academyOn && !studioOn && !agnesV2On) return null;
+              return (
+                <nav
+                  aria-label="LevelUp 2.0 Workspaces"
+                  className="anime-panel px-2.5 py-2 flex flex-wrap items-center gap-1.5 bg-white border border-sky-200"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setActiveWorkspace('today')}
+                    className={`px-3 py-1.5 rounded font-hud font-bold text-xs transition ${
+                      activeWorkspace === 'today' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    {lang === 'id' ? 'Command Center' : 'Command Center'}
+                  </button>
+                  {academyOn && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveWorkspace('academy')}
+                      className={`px-3 py-1.5 rounded font-hud font-bold text-xs transition ${
+                        activeWorkspace === 'academy' ? 'bg-indigo-700 text-white' : 'bg-indigo-50 text-indigo-900 hover:bg-indigo-100'
+                      }`}
+                    >
+                      LevelUp Academy
+                    </button>
+                  )}
+                  {studioOn && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveWorkspace('studio')}
+                      className={`px-3 py-1.5 rounded font-hud font-bold text-xs transition ${
+                        activeWorkspace === 'studio' ? 'bg-emerald-700 text-white' : 'bg-emerald-50 text-emerald-900 hover:bg-emerald-100'
+                      }`}
+                    >
+                      Business Studio (16)
+                    </button>
+                  )}
+                  {agnesV2On && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveWorkspace('agnes')}
+                      className={`px-3 py-1.5 rounded font-hud font-bold text-xs transition ${
+                        activeWorkspace === 'agnes' ? 'bg-sky-700 text-white' : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
+                      }`}
+                    >
+                      Agnes AI 2.0 (10)
+                    </button>
+                  )}
+                </nav>
+              );
+            })()}
+
+            {activeWorkspace === 'academy' ? (
+              <Suspense fallback={<div className="py-12 text-center font-mono text-xs text-slate-600">Loading LevelUp Academy...</div>}>
+                <AcademyWorkspace
+                  uid={cloudUser?.uid}
+                  player={player}
+                  lang={lang}
+                  evidenceList={evidenceList}
+                  onAddQuest={addCoachQuest}
+                  onOpenEvidenceModal={(opts) => setModal({ type: 'evidence', ...opts })}
+                  onOpenStudioTool={(canvasId) => {
+                    if (isFeatureEnabled(featureFlags, 'businessStudio', { isInternalStaff: isAdmin })) {
+                      setStudioInitialTool(canvasId as StudioCanvasId);
+                      setActiveWorkspace('studio');
+                    }
+                  }}
+                  onNotify={notify}
+                />
+              </Suspense>
+            ) : activeWorkspace === 'studio' ? (
+              <Suspense fallback={<div className="py-12 text-center font-mono text-xs text-slate-600">Loading Business Studio...</div>}>
+                <BusinessStudioWorkspace
+                  uid={cloudUser?.uid}
+                  player={player}
+                  lang={lang}
+                  initialToolId={studioInitialTool}
+                  onAddQuest={addCoachQuest}
+                  onOpenEvidenceModal={(opts) => setModal({ type: 'evidence', ...opts })}
+                  onNotify={notify}
+                />
+              </Suspense>
+            ) : activeWorkspace === 'agnes' ? (
+              <Suspense fallback={<div className="py-12 text-center font-mono text-xs text-slate-600">Loading Agnes AI 2.0...</div>}>
+                <AgnesCopilotWorkspace
+                  player={player}
+                  lang={lang}
+                  privacySettings={privacySettings}
+                  privateJournalNotes={journal.records
+                    .filter((r): r is CheckIn => r.kind === 'checkin' && Boolean(r.note.trim()))
+                    .slice(0, 5)
+                    .map((r) => r.note)}
+                  healthMetrics={{
+                    sleepHours: evidence.sleep,
+                    mood: evidence.mood,
+                    energy: evidence.energy,
+                    hasPainAlert: Boolean(player.gym?.currentPain),
+                  }}
+                  calendarEventTitles={calendarEvents.map((e) => e.title)}
+                  onAddQuest={addCoachQuest}
+                  onOpenPrivacySettings={() => setModal({ type: 'settings', tab: 'privacy' })}
+                />
+              </Suspense>
+            ) : (
+            <>
             {journal.syncError && <p role="status" className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
               {lang === 'id' ? 'Jurnal tersimpan di perangkat. Sinkronisasi Cloud sedang bermasalah.' : 'Journal is on this device. Cloud sync is currently unavailable.'}
             </p>}
             {reflection && <div className={mobileTab === 'status' ? 'block' : 'hidden lg:block'}>
               <DailyReflectionCard lang={lang} reflection={reflection} />
             </div>}
+            {(isFeatureEnabled(featureFlags, 'awakeningV2', { isInternalStaff: isAdmin }) ||
+              isFeatureEnabled(featureFlags, 'pathways', { isInternalStaff: isAdmin }) ||
+              Boolean(player.awakeningV2Completed)) && (
+              <div className={mobileTab === 'status' ? 'block' : 'hidden lg:block'}>
+                <DimensionsHudPanel
+                  player={player}
+                  lang={lang}
+                  showUpgradeBanner={isFeatureEnabled(featureFlags, 'awakeningV2', { isInternalStaff: isAdmin })}
+                  onOpenAwakeningV2={() => setModal({ type: 'awakeningV2' })}
+                />
+              </div>
+            )}
             {/* ROW 1: STATUS | NUTRITION | ENERGY */}
             <div
               className={`${
@@ -1380,6 +1640,15 @@ export default function App() {
                       dreamSteps: player.dreamSteps.filter((s) => s.id !== stepId),
                     });
                   }}
+                  onSubmitStepEvidence={(step) =>
+                    setModal({
+                      type: 'evidence',
+                      dimension: step.dimension || 'BUSINESS',
+                      targetType: 'dream_step',
+                      targetId: step.id,
+                      title: `${step.phase}: ${step.title}`.slice(0, 140),
+                    })
+                  }
                 />
               </div>
 
@@ -1444,6 +1713,8 @@ export default function App() {
                 onAddReward={() => setModal({ type: 'addReward' })}
                 onAddAction={handleTurnNewsIntoQuest} />
             </div>
+            </>
+            )}
           </section>
         )}
       </main>
@@ -1467,30 +1738,61 @@ export default function App() {
       )}
 
       {modal?.type === 'settings' && (
-        <SettingsModal
-          initialTab={modal.tab}
-          lang={lang}
-          aiConfig={aiConfig}
-          sharedAIConfig={sharedAIConfig}
-          onSaveAIConfig={handleSaveAIConfig}
-          cloudUser={cloudUser}
-          syncStatus={syncStatus}
-          onSaveFirebaseConfig={handleSaveFirebaseConfig}
-          onForceCloudSync={handleForceCloudSync}
-          sfxMuted={sfxMutedState}
-          onToggleSfx={() => {
-            const next = !sfxMutedState;
-            setSfxMutedState(next);
-            setSfxMuted(next);
-            saveSfxMuted(next);
-          }}
-          canInstallPWA={Boolean(installPrompt)}
-          onInstallPWA={() => void handleInstallPWA()}
-          onExportJSON={handleExportJSON}
-          onImportJSON={handleImportJSON}
-          onNotify={notify}
-          onClose={() => setModal(null)}
-        />
+        <Suspense fallback={null}>
+          <SettingsModal
+            initialTab={modal.tab}
+            lang={lang}
+            aiConfig={aiConfig}
+            sharedAIConfig={sharedAIConfig}
+            onSaveAIConfig={handleSaveAIConfig}
+            privacySettings={privacySettings}
+            onSavePrivacySettings={handleSavePrivacySettings}
+            cloudUser={cloudUser}
+            syncStatus={syncStatus}
+            onSaveFirebaseConfig={handleSaveFirebaseConfig}
+            onForceCloudSync={handleForceCloudSync}
+            sfxMuted={sfxMutedState}
+            onToggleSfx={() => {
+              const next = !sfxMutedState;
+              setSfxMutedState(next);
+              setSfxMuted(next);
+              saveSfxMuted(next);
+            }}
+            canInstallPWA={Boolean(installPrompt)}
+            onInstallPWA={() => void handleInstallPWA()}
+            onExportJSON={handleExportJSON}
+            onImportJSON={handleImportJSON}
+            onNotify={notify}
+            onClose={() => setModal(null)}
+          />
+        </Suspense>
+      )}
+
+      {modal?.type === 'awakeningV2' && player && (
+        <Suspense fallback={null}>
+          <AwakeningV2Modal
+            player={player}
+            lang={lang}
+            onSave={handleSaveAwakeningV2}
+            onClose={() => setModal(null)}
+          />
+        </Suspense>
+      )}
+
+      {modal?.type === 'evidence' && player && (
+        <Suspense fallback={null}>
+          <EvidenceModal
+            ownerUid={cloudUser?.uid || 'guest'}
+            lang={lang}
+            defaultDimension={modal.dimension}
+            defaultTargetType={modal.targetType}
+            defaultTargetId={modal.targetId}
+            defaultTitle={modal.title}
+            existingEvidence={evidenceList}
+            onSubmitEvidence={handleSubmitEvidence}
+            onClose={() => setModal(null)}
+          />
+        </Suspense>
       )}
 
       {modal?.type === 'reset' && (

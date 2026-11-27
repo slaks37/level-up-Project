@@ -771,8 +771,14 @@ export function normalizePlayerProfile(raw: Partial<PlayerProfile>, lang: Langua
       ? raw.dreamSteps
       : createDefaultDreamSteps(goal, profession, targetLevel, dailyBreakdown, lang);
 
+  const hasV4Fields =
+    raw.schemaVersion === 4 ||
+    Boolean(raw.pathwayId) ||
+    Boolean(raw.awakeningV2Completed) ||
+    Boolean(raw.purposeStatement);
+
   return {
-    schemaVersion: PLAYER_SCHEMA_VERSION,
+    schemaVersion: hasV4Fields ? 4 : PLAYER_SCHEMA_VERSION,
     name: raw.name || 'Hunter',
     gender,
     age,
@@ -834,6 +840,33 @@ export function normalizePlayerProfile(raw: Partial<PlayerProfile>, lang: Langua
     growthNews: Array.isArray(raw.growthNews) ? raw.growthNews : [],
     groundingSources: Array.isArray(raw.groundingSources) ? raw.groundingSources : [],
     boss: raw.boss ?? { name: goal, desc: goal, hp: 1000, maxHp: 1000 },
+    ...(raw.pathwayId ? { pathwayId: raw.pathwayId } : {}),
+    ...(typeof raw.purposeStatement === 'string' && raw.purposeStatement.trim()
+      ? { purposeStatement: raw.purposeStatement.trim().slice(0, 500) }
+      : {}),
+    ...(typeof raw.awakeningV2Completed === 'boolean'
+      ? { awakeningV2Completed: raw.awakeningV2Completed }
+      : {}),
+    ...(Array.isArray(raw.availableResources)
+      ? { availableResources: raw.availableResources.filter((r): r is string => typeof r === 'string').slice(0, 20) }
+      : {}),
+    ...(Array.isArray(raw.preferredActiveDays)
+      ? { preferredActiveDays: raw.preferredActiveDays.filter((d): d is number => typeof d === 'number' && d >= 0 && d <= 6).slice(0, 7) }
+      : {}),
+    ...(raw.skillSelfRatings && typeof raw.skillSelfRatings === 'object'
+      ? { skillSelfRatings: raw.skillSelfRatings }
+      : {}),
+    ...(typeof raw.competencyLevel === 'number'
+      ? { competencyLevel: Math.max(1, Math.min(10, Math.round(raw.competencyLevel))) }
+      : {}),
+    ...(typeof raw.competencyPoints === 'number'
+      ? { competencyPoints: Math.max(0, Math.round(raw.competencyPoints)) }
+      : {}),
+    ...(typeof raw.businessLevel === 'number'
+      ? { businessLevel: Math.max(0, Math.min(10, Math.round(raw.businessLevel))) }
+      : {}),
+    ...(raw.businessStage ? { businessStage: raw.businessStage } : {}),
+    ...(raw.activeVentureId !== undefined ? { activeVentureId: raw.activeVentureId } : {}),
   };
 }
 

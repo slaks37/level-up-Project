@@ -112,6 +112,8 @@ export const AdminParticipantInspector: React.FC<AdminParticipantInspectorProps>
   const dailyLogs = record?.dailyLogs ?? [];
   const transactions = record?.coinTransactions ?? [];
   const calendar = record?.calendar ?? null;
+  const tier1Restricted = Boolean(record?.tier1Restricted);
+  const wellnessShared = Boolean(record?.privacy?.shareWellnessWithCoach);
 
   const analysis = useMemo(
     () =>
@@ -267,22 +269,32 @@ export const AdminParticipantInspector: React.FC<AdminParticipantInspectorProps>
       </div>
 
       {/* Tabs */}
-      <div className="flex flex-wrap gap-1 border-b border-slate-200 bg-slate-100 p-2">
-        {tabs.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setTab(item.id)}
-            className={`px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1.5 transition ${
-              tab === item.id
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'bg-white text-slate-700 border border-slate-200 hover:border-sky-400'
-            }`}
-          >
-            {item.icon}
-            <span>{item.label}</span>
-          </button>
-        ))}
+      <div className="border-b border-slate-200 bg-slate-100 p-2 space-y-2">
+        {(tier1Restricted || !wellnessShared) && (
+          <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-950">
+            <strong>{id ? 'Perlindungan Privasi Tier 1 (UU PDP):' : 'Tier 1 Privacy Protection:'}</strong>{' '}
+            {id
+              ? 'Jurnal pribadi, catatan mood/tidur/makan, dan kalender peserta bersifat privat milik peserta (owner-only). Progres Peta Impian, tugas, skill, dan audit koin tetap tersedia di sini.'
+              : 'Private journals, mood/sleep/meal entries, and personal calendar events are owner-only by default. Dream Map, tasks, skills, and coin audit history remain visible here.'}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-1">
+          {tabs.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setTab(item.id)}
+              className={`px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1.5 transition ${
+                tab === item.id
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-white text-slate-700 border border-slate-200 hover:border-sky-400'
+              }`}
+            >
+              {item.icon}
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {loading && !record ? (

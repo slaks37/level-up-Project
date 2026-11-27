@@ -14,14 +14,14 @@ export default defineConfig({
       manifest: {
         name: brandTitle,
         short_name: brandName,
-        description: 'Build your goals, track daily progress, and grow through work, study, and healthy habits.',
+        description: 'Awaken Your Entrepreneurial Spirit — Level Up Yourself. Level Up Your Business. Level Up Your Impact.',
         theme_color: '#0f172a',
         background_color: '#eef2f6',
         display: 'standalone',
         orientation: 'any',
         scope: '/',
         start_url: '/',
-        categories: ['productivity', 'health', 'fitness', 'education'],
+        categories: ['productivity', 'business', 'education', 'health'],
         icons: [
           {
             src: 'pwa-192x192.png',
@@ -46,6 +46,7 @@ export default defineConfig({
       workbox: {
         clientsClaim: true,
         skipWaiting: true,
+        cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         runtimeCaching: [
           {
@@ -93,6 +94,13 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes('node_modules/firebase') || id.includes('node_modules/@firebase')) {
             return 'firebase';
+          }
+          if (
+            id.includes('node_modules/react/') ||
+            id.includes('node_modules/react-dom/') ||
+            id.includes('node_modules/scheduler/')
+          ) {
+            return 'react-vendor';
           }
         },
       },

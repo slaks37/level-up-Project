@@ -62,6 +62,16 @@ import { DEFAULT_COIN_ECONOMY, normalizePlayerProfile, PLAYER_SCHEMA_VERSION } f
 import { loadRuntimeFirebaseConfig } from './storageService';
 import type { JournalEntry } from '../engine/journal';
 import { requestGoogleToken } from './googleCalendar';
+import {
+  DEFAULT_FEATURE_FLAGS,
+  normalizeFeatureFlags,
+  subscribeFeatureFlags,
+  type FeatureFlagsConfig,
+} from './featureFlags';
+import { DEFAULT_USER_PRIVACY_SETTINGS, type UserPrivacySettings } from '../engine/v2/privacy';
+import { normalizePrivacySettings } from './privacyStorage';
+import type { EvidenceRecord } from '../engine/v2/evidence';
+import type { VentureWorkspaceState } from '../engine/v2/businessStudio';
 
 export const BOOTSTRAP_ADMIN_EMAIL = (
   import.meta.env.VITE_ADMIN_EMAIL || 'stefenlaksana.sl@gmail.com'
@@ -753,9 +763,15 @@ function stripUndefined<T>(value: T): T {
 }
 
 function sanitizeProfileForFirestore(uid: string, player: PlayerProfile) {
+  const hasV4Fields =
+    player.schemaVersion === 4 ||
+    Boolean(player.pathwayId) ||
+    Boolean(player.awakeningV2Completed) ||
+    Boolean(player.purposeStatement);
+
   return {
     ownerUid: uid,
-    schemaVersion: PLAYER_SCHEMA_VERSION,
+    schemaVersion: hasV4Fields ? 4 : PLAYER_SCHEMA_VERSION,
     updatedAt: serverTimestamp(),
     name: (player.name || 'Hunter').slice(0, 100),
     gender: player.gender === 'female' ? 'female' : 'male',
@@ -826,6 +842,25 @@ function sanitizeProfileForFirestore(uid: string, player: PlayerProfile) {
       hp: Math.max(0, Math.round(player.boss?.hp ?? 1000)),
       maxHp: Math.max(1, Math.round(player.boss?.maxHp ?? 1000)),
     },
+    ...(player.pathwayId ? { pathwayId: player.pathwayId } : {}),
+    ...(player.purposeStatement ? { purposeStatement: player.purposeStatement.trim().slice(0, 500) } : {}),
+    ...(typeof player.awakeningV2Completed === 'boolean'
+      ? { awakeningV2Completed: player.awakeningV2Completed }
+      : {}),
+    ...(player.availableResources?.length
+      ? { availableResources: player.availableResources.slice(0, 20).map((r) => String(r).slice(0, 80)) }
+      : {}),
+    ...(player.preferredActiveDays?.length
+      ? { preferredActiveDays: player.preferredActiveDays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6).slice(0, 7) }
+      : {}),
+    ...(player.skillSelfRatings && Object.keys(player.skillSelfRatings).length > 0
+      ? { skillSelfRatings: stripUndefined(player.skillSelfRatings) }
+      : {}),
+    ...(typeof player.competencyLevel === 'number' ? { competencyLevel: Math.max(1, Math.min(10, Math.round(player.competencyLevel))) } : {}),
+    ...(typeof player.competencyPoints === 'number' ? { competencyPoints: Math.max(0, Math.round(player.competencyPoints)) } : {}),
+    ...(typeof player.businessLevel === 'number' ? { businessLevel: Math.max(0, Math.min(10, Math.round(player.businessLevel))) } : {}),
+    ...(player.businessStage ? { businessStage: player.businessStage } : {}),
+    ...(player.activeVentureId !== undefined ? { activeVentureId: player.activeVentureId } : {}),
   };
 }
 
@@ -1127,12 +1162,242 @@ export async function fetchCalendarSummaryFromCloud(
   };
 }
 
+export function subscribeAppFeatureFlags(
+  callback: (flags: FeatureFlagsConfig) => void
+): Unsubscribe {
+  return subscribeFeatureFlags(firestoreDb, callback);
+}
+
+export async function fetchAppFeatureFlags(): Promise<FeatureFlagsConfig> {
+  if (!firestoreDb) return { ...DEFAULT_FEATURE_FLAGS };
+  try {
+    const snap = await getDoc(doc(firestoreDb, 'appConfig', 'featureFlags'));
+    if (!snap.exists()) return { ...DEFAULT_FEATURE_FLAGS };
+    return normalizeFeatureFlags(snap.data() as Partial<FeatureFlagsConfig>);
+  } catch {
+    return { ...DEFAULT_FEATURE_FLAGS };
+  }
+}
+
+export async function saveAppFeatureFlags(
+  actor: User,
+  rawFlags: FeatureFlagsConfig
+): Promise<FeatureFlagsConfig> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  const safe = normalizeFeatureFlags(rawFlags);
+  await setDoc(doc(firestoreDb, 'appConfig', 'featureFlags'), {
+    awakeningV2: safe.awakeningV2,
+    pathways: safe.pathways,
+    academy: safe.academy,
+    businessStudio: safe.businessStudio,
+    agnesV2: safe.agnesV2,
+    serverWallet: safe.serverWallet,
+    myValueRedemption: safe.serverWallet && safe.myValueRedemption,
+    ecosystemSync: safe.ecosystemSync,
+    cohortAllowlist: safe.cohortAllowlist,
+    updatedBy: (actor.email || actor.uid).slice(0, 128),
+    updatedAt: serverTimestamp(),
+  });
+  return safe;
+}
+
+export function subscribeUserPrivacySettings(
+  uid: string,
+  callback: (settings: UserPrivacySettings) => void
+): Unsubscribe {
+  if (!firestoreDb) {
+    callback({ ...DEFAULT_USER_PRIVACY_SETTINGS });
+    return () => {};
+  }
+  return onSnapshot(
+    doc(firestoreDb, 'users', uid, 'privacy', 'settings'),
+    (snap) => {
+      callback(
+        snap.exists()
+          ? normalizePrivacySettings(snap.data() as Partial<UserPrivacySettings>)
+          : { ...DEFAULT_USER_PRIVACY_SETTINGS }
+      );
+    },
+    () => {
+      callback({ ...DEFAULT_USER_PRIVACY_SETTINGS });
+    }
+  );
+}
+
+export async function saveUserPrivacySettings(
+  uid: string,
+  raw: UserPrivacySettings
+): Promise<UserPrivacySettings> {
+  const safe = normalizePrivacySettings(raw);
+  if (!firestoreDb) return safe;
+  await setDoc(doc(firestoreDb, 'users', uid, 'privacy', 'settings'), {
+    ownerUid: uid,
+    shareCoachingProgressWithMentor: safe.shareCoachingProgressWithMentor,
+    shareBusinessCanvasesWithMentor: safe.shareBusinessCanvasesWithMentor,
+    shareWellnessWithCoach: safe.shareWellnessWithCoach,
+    sharePrivateJournalWithAgnes: safe.sharePrivateJournalWithAgnes,
+    shareHealthMetricsWithAgnes: safe.shareHealthMetricsWithAgnes,
+    shareAggregatedImpactWithEcosystem: safe.shareAggregatedImpactWithEcosystem,
+    updatedAt: serverTimestamp(),
+  });
+  return safe;
+}
+
+export async function saveEvidenceRecordToCloud(uid: string, record: EvidenceRecord): Promise<void> {
+  if (!firestoreDb) return;
+  await setDoc(doc(firestoreDb, 'users', uid, 'evidence', record.id), {
+    ownerUid: uid,
+    dimension: record.dimension,
+    targetType: record.targetType,
+    targetId: record.targetId.slice(0, 128),
+    title: record.title.slice(0, 140),
+    summary: record.summary.slice(0, 2000),
+    evidenceKind: record.evidenceKind,
+    ...(record.artifactUrl ? { artifactUrl: record.artifactUrl.slice(0, 500) } : {}),
+    sourceTag: 'validated_evidence',
+    reviewStatus: record.reviewStatus === 'submitted' ? 'submitted' : 'draft',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function fetchUserEvidenceRecords(uid: string, maxCount = 80): Promise<EvidenceRecord[]> {
+  if (!firestoreDb) return [];
+  const q = query(collection(firestoreDb, 'users', uid, 'evidence'), limit(maxCount));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      ownerUid: String(data.ownerUid || uid),
+      dimension: (data.dimension || 'BUSINESS') as EvidenceRecord['dimension'],
+      targetType: (data.targetType || 'dream_step') as EvidenceRecord['targetType'],
+      targetId: String(data.targetId || ''),
+      title: String(data.title || ''),
+      summary: String(data.summary || ''),
+      evidenceKind: (data.evidenceKind || 'reflection') as EvidenceRecord['evidenceKind'],
+      ...(typeof data.artifactUrl === 'string' && data.artifactUrl ? { artifactUrl: data.artifactUrl } : {}),
+      sourceTag: 'validated_evidence',
+      reviewStatus: (data.reviewStatus || 'draft') as EvidenceRecord['reviewStatus'],
+      ...(typeof data.reviewerFeedback === 'string' ? { reviewerFeedback: data.reviewerFeedback } : {}),
+      ...(typeof data.rubricScore === 'number' ? { rubricScore: data.rubricScore } : {}),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  });
+}
+
+export async function saveVentureToCloud(
+  uid: string,
+  venture: VentureWorkspaceState,
+  pathwayId = 'sociopreneur'
+): Promise<void> {
+  if (!firestoreDb) return;
+  const ventureRef = doc(firestoreDb, 'users', uid, 'ventures', venture.id);
+  const existing = await getDoc(ventureRef).catch(() => null);
+  if (!existing || !existing.exists()) {
+    await setDoc(ventureRef, {
+      ownerUid: uid,
+      name: venture.name.trim().slice(0, 140) || 'My Venture',
+      sector: venture.sector.trim().slice(0, 120) || 'General',
+      pathwayId,
+      businessStage: 'idea',
+      businessLevel: 0,
+      marketplaceStatus: 'not_submitted',
+      summary: venture.summary.trim().slice(0, 1000),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    await updateDoc(ventureRef, {
+      name: venture.name.trim().slice(0, 140) || 'My Venture',
+      sector: venture.sector.trim().slice(0, 120) || 'General',
+      summary: venture.summary.trim().slice(0, 1000),
+      updatedAt: serverTimestamp(),
+    });
+  }
+}
+
+export async function publishAcademyCourseToCloud(
+  actor: User,
+  course: {
+    id: string;
+    slug: string;
+    title: string;
+    summary: string;
+    pathwayIds: string[];
+    accessType: 'free' | 'paid_external' | 'cohort_only';
+    status: 'draft' | 'published' | 'archived';
+  }
+): Promise<void> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  await setDoc(doc(firestoreDb, 'courses', course.id), {
+    slug: course.slug.trim().slice(0, 100),
+    title: course.title.trim().slice(0, 160),
+    summary: course.summary.trim().slice(0, 1000),
+    pathwayIds: course.pathwayIds.slice(0, 6),
+    accessType: course.accessType,
+    status: course.status,
+    updatedBy: (actor.email || actor.uid).slice(0, 128),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export interface SubmissionReviewItem {
+  id: string;
+  uid: string;
+  courseId: string;
+  lessonId: string;
+  type: 'quiz' | 'assignment';
+  status: 'submitted' | 'graded' | 'revision_requested';
+  passed: boolean;
+  score?: number;
+  feedback?: string;
+}
+
+export async function fetchPendingSubmissionsForReview(maxCount = 50): Promise<SubmissionReviewItem[]> {
+  if (!firestoreDb) return [];
+  const snap = await getDocs(query(collection(firestoreDb, 'submissions'), limit(maxCount)));
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      uid: String(data.uid || ''),
+      courseId: String(data.courseId || ''),
+      lessonId: String(data.lessonId || ''),
+      type: data.type === 'quiz' ? 'quiz' : 'assignment',
+      status: (data.status || 'submitted') as SubmissionReviewItem['status'],
+      passed: Boolean(data.passed),
+      ...(typeof data.score === 'number' ? { score: data.score } : {}),
+      ...(typeof data.feedback === 'string' ? { feedback: data.feedback } : {}),
+    };
+  });
+}
+
+export async function gradeSubmissionByMentor(
+  reviewer: User,
+  submissionId: string,
+  decision: { status: 'graded' | 'revision_requested'; passed: boolean; score: number; feedback: string }
+): Promise<void> {
+  if (!firestoreDb) throw new Error('Firestore belum siap.');
+  await updateDoc(doc(firestoreDb, 'submissions', submissionId), {
+    status: decision.status,
+    passed: Boolean(decision.passed),
+    score: Math.max(0, Math.min(100, Math.round(decision.score))),
+    feedback: decision.feedback.trim().slice(0, 1000),
+    gradedBy: reviewer.uid,
+    gradedAt: serverTimestamp(),
+  });
+}
+
 export interface ParticipantFullRecord {
   profile: PlayerProfile | null;
   journal: JournalEntry[];
   dailyLogs: DailyLogEntry[];
   coinTransactions: CoinTransactionRecord[];
   calendar: SyncedCalendarRecord | null;
+  privacy: UserPrivacySettings;
+  tier1Restricted: boolean;
 }
 
 export async function fetchParticipantFullRecord(
@@ -1140,17 +1405,35 @@ export async function fetchParticipantFullRecord(
   lang: Language
 ): Promise<ParticipantFullRecord> {
   if (!firestoreDb) {
-    return { profile: null, journal: [], dailyLogs: [], coinTransactions: [], calendar: null };
+    return {
+      profile: null,
+      journal: [],
+      dailyLogs: [],
+      coinTransactions: [],
+      calendar: null,
+      privacy: { ...DEFAULT_USER_PRIVACY_SETTINGS },
+      tier1Restricted: false,
+    };
   }
   const db = firestoreDb;
-  const [profileSnap, journalSnap, dailyLogs, coinTransactions, calendar] = await Promise.all([
+  let journalDenied = false;
+  let calendarDenied = false;
+
+  const [profileSnap, journalSnap, dailyLogs, coinTransactions, calendar, privacySnap] = await Promise.all([
     getDoc(doc(db, 'users', uid, 'profile', 'main')).catch(() => null),
     getDocs(
       query(collection(db, 'users', uid, 'journal'), orderBy('dateKey', 'desc'), limit(360))
-    ).catch(() => null),
+    ).catch(() => {
+      journalDenied = true;
+      return null;
+    }),
     fetchRecentDailyLogs(uid, 60).catch(() => []),
     fetchCoinTransactions(uid, 100).catch(() => []),
-    fetchCalendarSummaryFromCloud(uid).catch(() => null),
+    fetchCalendarSummaryFromCloud(uid).catch(() => {
+      calendarDenied = true;
+      return null;
+    }),
+    getDoc(doc(db, 'users', uid, 'privacy', 'settings')).catch(() => null),
   ]);
 
   const profile =
@@ -1164,5 +1447,18 @@ export async function fetchParticipantFullRecord(
         .sort((a, b) => b.dateKey.localeCompare(a.dateKey) || b.updatedAt - a.updatedAt)
     : [];
 
-  return { profile, journal, dailyLogs, coinTransactions, calendar };
+  const privacy =
+    privacySnap && privacySnap.exists()
+      ? normalizePrivacySettings(privacySnap.data() as Partial<UserPrivacySettings>)
+      : { ...DEFAULT_USER_PRIVACY_SETTINGS };
+
+  return {
+    profile,
+    journal,
+    dailyLogs,
+    coinTransactions,
+    calendar,
+    privacy,
+    tier1Restricted: journalDenied || calendarDenied,
+  };
 }

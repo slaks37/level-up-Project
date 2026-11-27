@@ -30,6 +30,7 @@ import type {
 import { tr } from '../data/i18n';
 import { DEFAULT_COIN_ECONOMY, getActiveStage, getEffectiveStreak, getTodayDateKey } from '../engine/science';
 import { getCurrentDreamSteps, getRoadmapActions, type DailyTaskSuggestion } from '../engine/coaching';
+import { getDimensionLabel, inferQuestDimension } from '../engine/v2/dimensions';
 import { PromoNewsPanel } from './PromoNewsPanel';
 
 // =========================================================================
@@ -238,6 +239,7 @@ export const DreamRoadmapPanel: React.FC<{
   onAddRoadmapTask: (step: DreamStep, action: string) => void;
   onToggleStep: (stepId: string) => void;
   onDeleteStep: (stepId: string) => void;
+  onSubmitStepEvidence?: (step: DreamStep) => void;
 }> = ({
   player,
   lang,
@@ -250,6 +252,7 @@ export const DreamRoadmapPanel: React.FC<{
   onAddRoadmapTask,
   onToggleStep,
   onDeleteStep,
+  onSubmitStepEvidence,
 }) => {
   const currentSteps = getCurrentDreamSteps(player);
   const archivedSteps = player.dreamSteps.filter((step) => step.archived);
@@ -417,6 +420,32 @@ export const DreamRoadmapPanel: React.FC<{
                         <p className="text-[10px] text-slate-600 mt-0.5 leading-snug">
                           {step.coachTip}
                         </p>
+                      )}
+
+                      {(step.dimension || step.evidenceRequirement) && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                          {step.dimension && (
+                            <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-900 border border-sky-200">
+                              {getDimensionLabel(step.dimension, lang)}
+                            </span>
+                          )}
+                          {step.evidenceRequirement && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200">
+                              {lang === 'id' ? 'Bukti:' : 'Evidence:'} {step.evidenceRequirement}
+                            </span>
+                          )}
+                          {onSubmitStepEvidence && (
+                            <button
+                              type="button"
+                              onClick={() => onSubmitStepEvidence(step)}
+                              className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white"
+                            >
+                              {step.evidenceStatus === 'submitted'
+                                ? (lang === 'id' ? '✓ Bukti Terkirim' : '✓ Proof Sent')
+                                : (lang === 'id' ? '+ Kirim Bukti' : '+ Log Proof')}
+                            </button>
+                          )}
+                        </div>
                       )}
                     <details className="mt-2 rounded border border-slate-200 bg-white p-2 text-xs">
                       <summary className="cursor-pointer font-bold text-sky-900">{lang === 'id' ? 'Lihat langkah kecil' : 'See small steps'}</summary>
@@ -752,6 +781,15 @@ export const DailyTasksPanel: React.FC<{
                             🎯 {lang === 'id' ? 'IMPIAN' : 'DREAM'}
                           </span>
                         )}
+                        {(() => {
+                          const dim = inferQuestDimension(q);
+                          if (dim === 'HEALTH' || dim === 'SKILLS' || dim === 'CAREER') return null;
+                          return (
+                            <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-900 border border-sky-200">
+                              {getDimensionLabel(dim, lang)}
+                            </span>
+                          );
+                        })()}
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         <span className="font-mono text-[9px] font-bold text-sky-700">

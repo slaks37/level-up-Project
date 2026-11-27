@@ -10,6 +10,7 @@ import {
   LogOut,
   RefreshCw,
   Settings,
+  Shield,
   Smartphone,
   Upload,
   Volume2,
@@ -23,6 +24,7 @@ import type {
   SharedAIPublicConfig,
   SyncStatus,
 } from '../types';
+import { DEFAULT_USER_PRIVACY_SETTINGS, type UserPrivacySettings } from '../engine/v2/privacy';
 import { ModalShell } from './Modals';
 import { AGNES_PRESET_MODELS, testAIConnection } from '../services/aiService';
 import {
@@ -37,11 +39,13 @@ import {
 import { loadEnvFirebaseConfig, loadRuntimeFirebaseConfig } from '../services/storageService';
 
 interface SettingsModalProps {
-  initialTab?: 'ai' | 'cloud' | 'app';
+  initialTab?: 'ai' | 'cloud' | 'privacy' | 'app';
   lang: Language;
   aiConfig: AIConfig;
   sharedAIConfig: SharedAIPublicConfig | null;
   onSaveAIConfig: (cfg: AIConfig) => void;
+  privacySettings?: UserPrivacySettings;
+  onSavePrivacySettings?: (next: UserPrivacySettings) => Promise<void> | void;
   cloudUser: User | null;
   syncStatus: SyncStatus;
   onSaveFirebaseConfig: (cfg: FirebaseRuntimeConfig | null) => Promise<void>;
@@ -62,6 +66,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   aiConfig,
   sharedAIConfig,
   onSaveAIConfig,
+  privacySettings = DEFAULT_USER_PRIVACY_SETTINGS,
+  onSavePrivacySettings,
   cloudUser,
   syncStatus,
   onSaveFirebaseConfig,
@@ -75,7 +81,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onNotify,
   onClose,
 }) => {
-  const [tab, setTab] = useState<'ai' | 'cloud' | 'app'>(initialTab);
+  const [tab, setTab] = useState<'ai' | 'cloud' | 'privacy' | 'app'>(initialTab);
+  const [privacyDraft, setPrivacyDraft] = useState<UserPrivacySettings>(privacySettings);
+  const [savingPrivacy, setSavingPrivacy] = useState(false);
 
   // Agnes AI State
   const [preferSharedProxy, setPreferSharedProxy] = useState(
@@ -301,31 +309,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       onClose={onClose}
     >
       {/* Tabs */}
-      <div className="grid grid-cols-3 gap-1.5 bg-slate-100 p-1 rounded border border-slate-200">
+      <div className="grid grid-cols-4 gap-1 bg-slate-100 p-1 rounded border border-slate-200">
         <button
           type="button"
           onClick={() => setTab('ai')}
-          className={`py-1.5 px-2 rounded font-hud font-bold text-xs flex items-center justify-center gap-1.5 transition ${
+          className={`py-1.5 px-1.5 rounded font-hud font-bold text-[11px] flex items-center justify-center gap-1 transition ${
             tab === 'ai' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Cpu className="w-3.5 h-3.5 text-orange-400" />
-          <span>Agnes AI</span>
+          <Cpu className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+          <span className="truncate">Agnes AI</span>
         </button>
         <button
           type="button"
           onClick={() => setTab('cloud')}
-          className={`py-1.5 px-2 rounded font-hud font-bold text-xs flex items-center justify-center gap-1.5 transition ${
+          className={`py-1.5 px-1.5 rounded font-hud font-bold text-[11px] flex items-center justify-center gap-1 transition ${
             tab === 'cloud' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Cloud className="w-3.5 h-3.5 text-sky-400" />
-          <span>Cloud Sync</span>
+          <Cloud className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+          <span className="truncate">Cloud</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('privacy')}
+          className={`py-1.5 px-1.5 rounded font-hud font-bold text-[11px] flex items-center justify-center gap-1 transition ${
+            tab === 'privacy' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Shield className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <span className="truncate">{lang === 'id' ? 'Privasi' : 'Privacy'}</span>
         </button>
         <button
           type="button"
           onClick={() => setTab('app')}
-          className={`py-1.5 px-2 rounded font-hud font-bold text-xs flex items-center justify-center gap-1.5 transition ${
+          className={`py-1.5 px-1.5 rounded font-hud font-bold text-[11px] flex items-center justify-center gap-1 transition ${
             tab === 'app' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
@@ -801,7 +819,136 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
       )}
 
-      {/* TAB 3: APP, PWA INSTALL & BACKUP */}
+      {/* TAB 3: PRIVACY & CONSENT CONTROLS (LEVELUP 2.0 / UU PDP) */}
+      {tab === 'privacy' && (
+        <div className="space-y-3 text-xs">
+          <div className="p-3 rounded border border-emerald-200 bg-emerald-50 text-emerald-950 space-y-1">
+            <p className="font-bold flex items-center gap-1.5">
+              <Shield className="w-4 h-4 text-emerald-600" />
+              {lang === 'id'
+                ? 'Kontrol Privasi & Persetujuan Data (Privacy by Default)'
+                : 'Privacy & Data Consent Controls (Privacy by Default)'}
+            </p>
+            <p className="text-[11px] text-emerald-900">
+              {lang === 'id'
+                ? 'Jurnal harian, catatan mood/tidur/makan, dan kalender pribadimu bersifat privat (hanya kamu yang bisa membaca) dan tidak pernah dibagikan otomatis ke pihak eksternal.'
+                : 'Your private journals, mood/sleep/meal logs, and personal calendar stay owner-only by default and are never shared automatically with external platforms.'}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            {(
+              [
+                {
+                  key: 'shareCoachingProgressWithMentor' as const,
+                  titleId: 'Bagikan progres Peta Impian & belajar ke Mentor kohort',
+                  titleEn: 'Share Dream Map & learning progress with cohort Mentor',
+                  descId: 'Membantu mentor memantau progres kursus & tugas kohort.',
+                  descEn: 'Allows assigned mentors to track course & cohort milestones.',
+                  sensitive: false,
+                },
+                {
+                  key: 'shareBusinessCanvasesWithMentor' as const,
+                  titleId: 'Bagikan kanvas Business Studio ke Mentor kohort',
+                  titleEn: 'Share Business Studio canvases with cohort Mentor',
+                  descId: 'Izinkan mentor memberi umpan balik atas BMC, HPP & prototipe.',
+                  descEn: 'Allow mentors to review BMC, pricing & prototypes.',
+                  sensitive: false,
+                },
+                {
+                  key: 'shareWellnessWithCoach' as const,
+                  titleId: 'Bagikan ringkasan kebugaran/tidur/nyeri ke Coach',
+                  titleEn: 'Share wellness summary (sleep/mood/pain alerts) with Coach',
+                  descId: 'Default: OFF. Hanya ringkasan kondisi — bukan teks jurnal mentah.',
+                  descEn: 'Default: OFF. Summary alerts only — never raw private journal text.',
+                  sensitive: true,
+                },
+                {
+                  key: 'sharePrivateJournalWithAgnes' as const,
+                  titleId: 'Izinkan Agnes AI membaca catatan refleksi jurnal pribadi',
+                  titleEn: 'Allow Agnes AI to read private journal reflections',
+                  descId: 'Default: OFF. Hanya berlaku untuk mode Personal Coach / Wellness.',
+                  descEn: 'Default: OFF. Scoped only to Personal Coach / Wellness modes.',
+                  sensitive: true,
+                },
+                {
+                  key: 'shareHealthMetricsWithAgnes' as const,
+                  titleId: 'Izinkan Agnes AI membaca metrik tidur & energi harian',
+                  titleEn: 'Allow Agnes AI to read daily sleep & energy metrics',
+                  descId: 'Default: OFF. PII (email/HP/NIK) tetap otomatis disensor.',
+                  descEn: 'Default: OFF. PII (email/phone/ID) is always automatically redacted.',
+                  sensitive: true,
+                },
+                {
+                  key: 'shareAggregatedImpactWithEcosystem' as const,
+                  titleId: 'Bagikan ringkasan dampak usaha ke ekosistem Sociopreneur.online',
+                  titleEn: 'Share verified venture impact summary with Sociopreneur.online',
+                  descId: 'Default: OFF. Hanya metrik dampak usaha — nol data jurnal pribadi.',
+                  descEn: 'Default: OFF. Venture impact KPIs only — zero personal journal data.',
+                  sensitive: true,
+                },
+              ] as const
+            ).map((item) => (
+              <label
+                key={item.key}
+                className="flex items-start justify-between gap-3 p-2.5 rounded border border-slate-200 bg-slate-50 cursor-pointer hover:border-sky-300"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-bold text-slate-900">
+                      {lang === 'id' ? item.titleId : item.titleEn}
+                    </span>
+                    {item.sensitive && (
+                      <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">
+                        {lang === 'id' ? 'SENSITIF · DEFAULT OFF' : 'SENSITIVE · DEFAULT OFF'}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    {lang === 'id' ? item.descId : item.descEn}
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={privacyDraft[item.key]}
+                  onChange={(e) =>
+                    setPrivacyDraft((prev) => ({ ...prev, [item.key]: e.target.checked }))
+                  }
+                  className="mt-1 h-4 w-4 accent-sky-600 shrink-0"
+                />
+              </label>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            disabled={savingPrivacy}
+            onClick={async () => {
+              if (!onSavePrivacySettings) return;
+              setSavingPrivacy(true);
+              try {
+                await onSavePrivacySettings(privacyDraft);
+                onNotify(
+                  lang === 'id'
+                    ? 'Pengaturan privasi & persetujuan data berhasil disimpan.'
+                    : 'Privacy & data consent preferences saved.',
+                  'success'
+                );
+              } catch (err) {
+                onNotify(err instanceof Error ? err.message : String(err), 'error');
+              } finally {
+                setSavingPrivacy(false);
+              }
+            }}
+            className="w-full py-2 rounded bg-slate-900 hover:bg-emerald-700 disabled:opacity-60 text-white font-hud font-bold text-xs uppercase flex items-center justify-center gap-1.5 btn-anime"
+          >
+            {savingPrivacy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
+            <span>{lang === 'id' ? 'SIMPAN PENGATURAN PRIVASI' : 'SAVE PRIVACY SETTINGS'}</span>
+          </button>
+        </div>
+      )}
+
+      {/* TAB 4: APP, PWA INSTALL & BACKUP */}
       {tab === 'app' && (
         <div className="space-y-3 text-xs">
           {/* Audio Toggle */}

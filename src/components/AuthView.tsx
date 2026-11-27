@@ -394,21 +394,17 @@ export const AuthView: React.FC<AuthViewProps> = ({ lang, adminOnly = false, onE
             </span>
           </button>
 
-          <div className="pt-1 border-t border-slate-200 text-center">
-            <button
-              type="button"
-              onClick={onExit}
-              className="text-xs font-semibold text-slate-500 hover:text-slate-800 underline"
-            >
-              {adminOnly
-                ? lang === 'id'
-                  ? 'Kembali ke Level Up'
-                  : 'Back to Level Up'
-                : lang === 'id'
-                  ? 'Lanjut tanpa login (Mode Offline Lokal saja)'
-                  : 'Continue without login (Local Offline Mode only)'}
-            </button>
-          </div>
+          {adminOnly && (
+            <div className="pt-1 border-t border-slate-200 text-center">
+              <button
+                type="button"
+                onClick={onExit}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-800 underline"
+              >
+                {lang === 'id' ? 'Kembali ke Level Up' : 'Back to Level Up'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </section>

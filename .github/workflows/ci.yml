@@ -1,0 +1,45 @@
+name: CI Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Typecheck, Unit Tests & Production Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Run unit tests (Vitest)
+        run: npm test
+
+      - name: Production build (Vite + PWA)
+        run: npm run build
+
+      - name: Verify migration scripts syntax & PWA assets
+        run: node --check scripts/migrations/m2-privacy-backfill.mjs && node --check scripts/migrations/m4-wallet-snapshot.mjs && test -f dist/sw.js && test -f dist/manifest.webmanifest
+
+      - name: Install backend server dependencies
+        run: npm --prefix server ci
+
+      - name: Backend TypeScript build
+        run: npm --prefix server run build
+
+      - name: Backend Stage 9-11 integration tests
+        run: npm --prefix server test

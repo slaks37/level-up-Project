@@ -1,7 +1,7 @@
 rules_version = '2';
 
 // ===============================================================
-// Assumed Data Model — LEVEL UP SYSTEM PWA
+// Assumed Data Model — LEVEL UP SYSTEM PWA (Schema v3 + v4 / LevelUp 2.0)
 // ===============================================================
 //
 // Security Architecture:
@@ -15,14 +15,24 @@ rules_version = '2';
 //     admin or AI proxy readable and admin-only writable.
 //   - Partner coin secrets (`adminSecrets/coinPartner`) are strictly admin-only
 //     (NOT readable by AI proxy, operators, auditors, or regular users).
-//   - Non-secret app configuration (`appConfig/aiPublic`, `appConfig/coinEconomy`)
-//     is readable by authenticated users, writable only by admins, and strictly
-//     forbids API keys or secret fields.
-//   - Participant subcollections (`profile/main`, `journal`, `dailyLogs`,
-//     `coinTransactions`, `calendar/latest`) are readable by the owner or
-//     verified staff (`isStaff()`) for monitoring & habit analytics, while
-//     writes remain strictly owner-only (except admin coin/reward adjustments
-//     on `profile/main` and admin ledger entries on `coinTransactions`).
+//   - Non-secret app configuration (`appConfig/aiPublic`, `appConfig/coinEconomy`,
+//     `appConfig/featureFlags`) is readable by authenticated users, writable only
+//     by admins, and strictly forbids API keys or secret fields.
+//     `appConfig/featureFlags` enforces the hard invariant that `myValueRedemption`
+//     cannot be enabled unless `serverWallet` is also enabled.
+//   - Tier 1 Privacy Isolation (SEC-02 Remediation):
+//     Sensitive personal data (`journal`, `calendar/latest`, `dailyLogs`) is
+//     strictly owner-only for BOTH reads and writes (inaccessible to admins,
+//     operators, and auditors).
+//   - Privacy & Consent (`users/{userId}/privacy/settings`) is owner-writable only
+//     and readable by owner or verified staff.
+//   - Coaching / Admin Monitoring Data (`users/{userId}`, `profile/main`,
+//     `coinTransactions`, `evidence`) remains readable by owner or verified staff.
+//     `profile/main` enforces Stage 6 3-Axis anti-tampering (owner cannot self-inflate
+//     `competencyLevel`, `competencyPoints`, `businessLevel`, or `businessStage`).
+//   - Server-Authoritative Wallet (`wallet/main`, `walletLedger/{eventKey}`) is
+//     readable by owner, admin, or auditor, and strictly denies ALL client writes
+//     (written exclusively via backend Firebase Admin SDK).
 //
 // 1. Collection: admins/{uid}
 //    Document ID: {uid} (Firebase Auth UID of granted admin)
@@ -45,36 +55,26 @@ rules_version = '2';
 //      - updatedAt: timestamp (optional; == request.time on update)
 //
 // 3. Collection: appConfig/{docId}
-//    Document ID: strictly 'aiPublic' or 'coinEconomy' (no API keys or secrets permitted)
+//    Document ID: strictly 'aiPublic', 'coinEconomy', or 'featureFlags' (no API keys or secrets)
 //    Access: authenticated `get`, admin `list`/`create`/`update`, no `delete`.
 //    Document 'aiPublic' fields (all 8 required; strict hasOnly):
-//      - enabled: bool
-//      - providerName: string (1..60 chars)
-//      - model: string (1..80 chars)
-//      - dailyLimit: int (0..500)
-//      - proxyConfigured: bool
-//      - maintenanceNotice: string (0..300 chars)
-//      - updatedAt: timestamp
-//      - updatedBy: string (1..128 chars)
+//      - enabled: bool, providerName: string (1..60), model: string (1..80),
+//        dailyLimit: int (0..500), proxyConfigured: bool,
+//        maintenanceNotice: string (0..300), updatedAt: timestamp, updatedBy: string (1..128)
 //    Document 'coinEconomy' fields (all 18 required; strict hasOnly):
-//      - coinName: string (1..60 chars)
-//      - coinSymbol: string (1..16 chars)
-//      - pointPerTask: int (0..1000)
-//      - pointPerWorkout: int (0..1000)
-//      - pointPerCheckIn: int (0..1000)
-//      - pointPerMilestone: int (0..1000)
-//      - pointPerOverdrive: int (0..1000)
-//      - pointPerDayClear: int (0..1000)
-//      - pointPerLevelUp: int (0..1000)
-//      - startingCoins: int (0..10000)
-//      - idrPerCoin: number (0..1000000)
-//      - partnerName: string (0..80 chars)
-//      - partnerEnabled: bool
-//      - partnerEndpoint: string (0..300 chars; empty or ^https?://.+$)
-//      - minRedeemCoins: int (1..100000)
-//      - transactionNote: string (0..300 chars)
+//      - coinName (1..60), coinSymbol (1..16),
+//        pointPerTask/Workout/CheckIn/Milestone/Overdrive/DayClear/LevelUp: int (0..1000),
+//        startingCoins: int (0..10000), idrPerCoin: number (0..1000000),
+//        partnerName (0..80), partnerEnabled: bool, partnerEndpoint (0..300; empty or http(s) URL),
+//        minRedeemCoins: int (1..100000), transactionNote (0..300),
+//        updatedAt: timestamp, updatedBy: string (1..128)
+//    Document 'featureFlags' fields (all 11 required; strict hasOnly):
+//      - awakeningV2, pathways, academy, businessStudio, agnesV2, serverWallet,
+//        myValueRedemption, ecosystemSync: bool
+//      - Hard invariant: !(myValueRedemption == true && serverWallet != true)
+//      - cohortAllowlist: list (size <= 100)
+//      - updatedBy: string (0..128 chars)
 //      - updatedAt: timestamp
-//      - updatedBy: string (1..128 chars)
 //
 // 4. Collection: adminSecrets/{docId}
 //    Document ID: strictly 'aiProvider' or 'coinPartner' (secret vault)
@@ -82,21 +82,11 @@ rules_version = '2';
 //      - 'aiProvider': admin or AI proxy `get`; admin `create`/`update`; no `list`/`delete`.
 //      - 'coinPartner': admin ONLY `get`/`create`/`update`; no `list`/`delete`.
 //    Document 'aiProvider' fields (all 7 required; strict hasOnly):
-//      - baseUrl: string (1..300 chars; matches ^https?://.+$)
-//      - model: string (1..80 chars)
-//      - apiKey: string (0..500 chars)
-//      - enabled: bool
-//      - dailyLimit: int (0..500)
-//      - updatedAt: timestamp
-//      - updatedBy: string (1..128 chars)
+//      - baseUrl (1..300; ^https?://.+$), model (1..80), apiKey (0..500),
+//        enabled: bool, dailyLimit: int (0..500), updatedAt: timestamp, updatedBy (1..128)
 //    Document 'coinPartner' fields (all 7 required; strict hasOnly):
-//      - partnerName: string (0..80 chars)
-//      - merchantId: string (0..120 chars)
-//      - apiEndpoint: string (0..300 chars; empty or ^https?://.+$)
-//      - apiKey: string (0..500 chars)
-//      - webhookSecret: string (0..500 chars)
-//      - updatedAt: timestamp
-//      - updatedBy: string (1..128 chars)
+//      - partnerName (0..80), merchantId (0..120), apiEndpoint (0..300; empty or http(s) URL),
+//        apiKey (0..500), webhookSecret (0..500), updatedAt: timestamp, updatedBy (1..128)
 //
 // 5. Collection: users/{userId} (User Account Directory)
 //    Document ID: {userId} (Firebase Auth UID)
@@ -105,104 +95,146 @@ rules_version = '2';
 //            operator (status/quota reset on non-staff only), or AI proxy (quota only)
 //            `update`; admin `delete`.
 //    Fields (11 required + 1 optional; strict hasOnly):
-//      - ownerUid: string (1..128 chars; == userId; immutable on update)
-//      - displayName: string (1..120 chars)
-//      - email: string (0..254 chars; empty or valid email format)
-//      - language: string in ['id', 'en']
-//      - role: string in ['user', 'admin', 'operator', 'auditor'] (locked for non-admins)
-//      - status: string in ['active', 'suspended'] (locked for non-admins)
-//      - aiRequestsToday: int (0..10000; locked for non-admins)
-//      - aiTotalRequests: int (0..1000000; locked for non-admins)
-//      - aiQuotaDate: string (0..10 chars; empty or YYYY-MM-DD; locked for non-admins)
-//      - createdAt: timestamp (immutable on update)
-//      - updatedAt: timestamp
-//      - telemetry: map (optional; strict 17-field summary synced by owner or admin coin adjustment):
-//          name (string 0..100), profession (string 0..160), goal (string 0..300),
-//          level (int 1..999), gold (int 0..10000000), streak (int 0..100000),
-//          taskStreak (int 0..100000), workoutStreak (int 0..100000),
-//          completedTasksTotal (int 0..1000000), completedWorkoutsTotal (int 0..1000000),
-//          lastMood (string 0..30), lastEnergy (string 0..30),
-//          lastSleepHours (null or number 0..24), hasPainAlert (bool),
-//          projectBlocked (bool), lastActiveDate (string 0..10), updatedAt (int >= 0)
+//      - ownerUid (1..128; == userId; immutable), displayName (1..120), email (0..254),
+//        language in ['id', 'en'], role in ['user', 'admin', 'operator', 'auditor'] (locked),
+//        status in ['active', 'suspended'] (locked), aiRequestsToday (0..10000; locked),
+//        aiTotalRequests (0..1000000; locked), aiQuotaDate (0..10; locked),
+//        createdAt: timestamp (immutable), updatedAt: timestamp
+//      - telemetry: map (optional; strict 17-field summary synced by owner or admin coin adjustment)
 //
 // 6. Collection: users/{userId}/profile/{docId}
 //    Document ID: strictly 'main'
-//    Access: owner or staff `get`; owner `create`/`update`/`delete`;
+//    Access: owner or staff `get`; owner `create`/`update`/`delete` (with 3-Axis anti-tampering);
 //            admin `update` limited strictly to ['gold', 'rewards', 'updatedAt'].
-//    Fields (37 required + 10 optional; strict hasOnly; NO API keys permitted):
+//    Fields (37 required + 21 optional; strict hasOnly; NO API keys permitted):
+//      - Required v3 fields (37): ownerUid, schemaVersion (int 1..4), updatedAt,
+//        name, gender, age, height, weight, city, rewardInterest, bio,
+//        profession, classTitle, goal, targetLevel, dailyBreakdown, dailyDurationLog,
+//        coachAdvice, level, exp, maxExp, gold, streak, coreCharge,
+//        sleepCondition, nutritionCondition, stats, stages, quests, shadows,
+//        skillProgress, dreamSteps, rewards, discoveredPerks, growthNews,
+//        groundingSources, boss
+//      - Optional v3 fields (10): career, gym, taskStreak, workoutStreak,
+//        longestStreak, longestTaskStreak, longestWorkoutStreak,
+//        lastActiveStreakDate, lastTaskStreakDate, lastWorkoutStreakDate
+//      - Optional v4 fields (11):
+//          pathwayId in ['personal_growth', 'career_accelerator', 'entrepreneur',
+//                        'sociopreneur', 'community_agriculture', 'global_business'],
+//          purposeStatement (string <= 500), awakeningV2Completed (bool),
+//          availableResources (list <= 20), preferredActiveDays (list <= 7),
+//          skillSelfRatings (map <= 30), competencyLevel (int 1..10; server-managed),
+//          competencyPoints (int 0..100000; server-managed),
+//          businessLevel (int 0..10; server-managed),
+//          businessStage in ['idea','discover','prototype','validate','launch','grow','impact'] (server-managed),
+//          activeVentureId (null or string <= 128)
+//
+// 7. Collection: users/{userId}/privacy/{docId}
+//    Document ID: strictly 'settings'
+//    Access: owner or staff `get`; owner-only `create`/`update`; no `list`/`delete`.
+//    Fields (all 8 required; strict hasOnly):
 //      - ownerUid: string == userId (immutable on update)
-//      - schemaVersion: int
+//      - shareCoachingProgressWithMentor, shareBusinessCanvasesWithMentor,
+//        shareWellnessWithCoach, sharePrivateJournalWithAgnes,
+//        shareHealthMetricsWithAgnes, shareAggregatedImpactWithEcosystem: bool
 //      - updatedAt: timestamp
-//      - name (string <= 100), gender in ['male', 'female'], age, height, weight (number),
-//        city (string <= 100), rewardInterest (string <= 300), bio (map),
-//        profession (string <= 160), classTitle (string <= 120), goal (string <= 300),
-//        targetLevel (int), dailyBreakdown (map), dailyDurationLog (map),
-//        coachAdvice (string <= 1000), level, exp, maxExp, gold, streak, coreCharge (int),
-//        sleepCondition in ['poor', 'moderate', 'optimal'],
-//        nutritionCondition in ['deficit', 'balanced', 'high_protein'],
-//        stats (map), stages (list <= 20), quests (list <= 100), shadows (list <= 200),
-//        skillProgress (map <= 200; no secret/API-key field names),
-//        dreamSteps (list <= 50), rewards (list <= 50), discoveredPerks (list <= 30),
-//        growthNews (list <= 30), groundingSources (list <= 30), boss (map)
-//      - Optional fields:
-//          career (map), gym (map),
-//          taskStreak (int 0..100000), workoutStreak (int 0..100000),
-//          longestStreak (int 0..100000), longestTaskStreak (int 0..100000),
-//          longestWorkoutStreak (int 0..100000),
-//          lastActiveStreakDate (string 0..10), lastTaskStreakDate (string 0..10),
-//          lastWorkoutStreakDate (string 0..10)
 //
-// 7. Collection: users/{userId}/journal/{entryId}
+// 8. Collection: users/{userId}/journal/{entryId} (Tier 1 Private)
 //    Document ID: `{dateKey}-{phase}` (checkin) or `{dateKey}-task-{id}` (activity)
-//    Access: owner or staff `get`/`list`; owner-only `create`/`update`/`delete`.
+//    Access: strictly owner-only `get`/`list`/`create`/`update`/`delete`.
 //
-// 8. Collection: users/{userId}/dailyLogs/{dateKey}
+// 9. Collection: users/{userId}/dailyLogs/{dateKey} (Tier 1 Private)
 //    Document ID: {dateKey} matching YYYY-MM-DD (format & month/day range check)
-//    Access: owner or staff `get`/`list`; owner-only `create`/`update`/`delete`.
-//    Fields (all 13 required; strict hasOnly):
-//      - ownerUid: string == userId (immutable on update)
-//      - dateKey: string == {dateKey} doc ID (immutable on update)
-//      - completedTasks: int (0..100)
-//      - totalTasks: int (0..100)
-//      - studyMinutes: number (0..1440)
-//      - workMinutes: number (0..1440)
-//      - fitnessMinutes: number (0..1440)
-//      - expEarned: int (0..100000)
-//      - goldEarned: int (0..100000)
-//      - streakAfter: int (0..100000)
-//      - sleepCondition: string in ['poor', 'moderate', 'optimal']
-//      - nutritionCondition: string in ['deficit', 'balanced', 'high_protein']
-//      - createdAt: timestamp (preserved or server request.time on same-day upsert)
+//    Access: strictly owner-only `get`/`list`/`create`/`update`/`delete`.
 //
-// 9. Collection: users/{userId}/coinTransactions/{txId}
-//    Document ID: generated transaction ID
-//    Access: owner or staff `get`/`list`; owner `create` (earn/redeem with player sources only);
-//            admin `create` (admin_adjust/partner_tx/earn/redeem with all sources);
-//            no `update` or `delete` (immutable ledger).
-//    Fields (all 10 required; strict hasOnly):
-//      - ownerUid: string == userId
-//      - type: string in ['earn', 'redeem', 'admin_adjust', 'partner_tx']
-//      - source: string in ['task', 'workout', 'checkin', 'milestone', 'overdrive',
-//                           'day_clear', 'level_up', 'self_reward', 'admin', 'partner']
-//      - amount: int (-1000000..1000000, != 0)
-//      - balanceAfter: int (0..10000000)
-//      - note: string (0..240 chars)
-//      - partnerRef: string (0..120 chars)
-//      - actorUid: string (1..128 chars; == request.auth.uid)
-//      - actorEmail: string (0..254 chars)
-//      - createdAt: int (>= 0)
+// 10. Collection: users/{userId}/calendar/{docId} (Tier 1 Private)
+//     Document ID: strictly 'latest'
+//     Access: strictly owner-only `get`/`list`/`create`/`update`/`delete` on 'latest'.
 //
-// 10. Collection: users/{userId}/calendar/{docId}
-//     Document ID: strictly 'latest' on writes/deletes
-//     Access: owner or staff `get`/`list`; owner-only `create`/`update`/`delete` on 'latest'.
-//     Fields (all 5 required; strict hasOnly):
-//       - ownerUid: string == userId (immutable on update)
-//       - source: string in ['google_oauth', 'ics', 'none']
-//       - syncedAt: int (>= 0)
-//       - eventCount: int (0..50; == events.size())
-//       - events: list (size <= 50)
+// 11. Collection: users/{userId}/coinTransactions/{txId}
+//     Document ID: generated transaction ID
+//     Access: owner or staff `get`/`list`; owner `create` (earn/redeem with player sources only);
+//             admin `create` (admin_adjust/partner_tx/earn/redeem with all sources);
+//             no `update` or `delete` (immutable ledger).
 //
-// 11. Collection: aiUsageLogs/{logId}
+// 12. Collection: users/{userId}/wallet/{docId} (Server-Authoritative)
+//     Document ID: strictly 'main'
+//     Access: owner, admin, or auditor `get`; NO client `list`/`create`/`update`/`delete`.
+//
+// 13. Collection: users/{userId}/walletLedger/{eventKey} (Server-Authoritative)
+//     Document ID: deterministic idempotency eventKey
+//     Access: owner, admin, or auditor `get`/`list`; NO client `create`/`update`/`delete`.
+//
+// 14. Collection: users/{userId}/evidence/{evidenceId} (Evidence Vault)
+//     Document ID: evidence document ID
+//     Access: owner or staff `get`/`list`;
+//             owner `create` (reviewStatus in ['draft', 'submitted'] only; NEVER 'approved');
+//             owner `update` only while existing reviewStatus in ['draft', 'revision_requested']
+//               with createdAt immutable and next reviewStatus in ['draft', 'submitted'];
+//             owner `delete` only while existing reviewStatus == 'draft'.
+//     Fields (11 required + 2 optional; strict hasOnly):
+//       - ownerUid (== userId), dimension (7 enum), targetType (5 enum),
+//         targetId (1..128), title (1..140), summary (0..2000),
+//         evidenceKind (6 enum), sourceTag (== 'validated_evidence'),
+//         reviewStatus in ['draft', 'submitted'], createdAt (timestamp; immutable),
+//         updatedAt (timestamp)
+//       - Optional: cohortId (null or string <= 128), artifactUrl (string <= 500)
+//
+// 15. Collection: users/{userId}/ventures/{ventureId} (Business Studio Ventures)
+//     Access: owner or staff `get`/`list`; owner `create`/`update`/`delete`.
+//     Fields (10 required + 2 optional; strict hasOnly):
+//       - ownerUid (== userId; immutable), name (1..140), sector (0..100),
+//         pathwayId (6 enum), businessStage (7 enum; locked 'idea' on create, immutable by owner),
+//         businessLevel (int 0..10; locked 0 on create, immutable by owner),
+//         marketplaceStatus in ['not_submitted','submitted','approved','listed','rejected']
+//           (locked 'not_submitted' on create; owner may only keep unchanged or move 'not_submitted' -> 'submitted'),
+//         summary (0..2000), createdAt (timestamp; immutable), updatedAt (timestamp)
+//       - Optional: cohortId (null or string <= 128), externalProductId (null or string <= 128)
+//     Nested Subcollections:
+//       - canvases/{canvasType}: owner/staff `get`/`list`; owner `create`/`update`/`delete`
+//         strictly for the 16 allowed Business Studio canvas types.
+//       - experiments/{expId}: owner/staff `get`/`list`; owner `create`/`update`/`delete`
+//         with validated status & evidence origin tags.
+//       - marketFeedback/{eventId}: owner/staff `get`/`list`; NO client writes (server webhooks only).
+//
+// 16. Collection: users/{userId}/competencies/{competencyId} (Verified Competencies)
+//     Access: owner or staff `get`/`list`; NO client writes (server-only verification awards).
+//
+// 17. Collection: courses/{courseId} (+ modules/{moduleId} + lessons/{lessonId})
+//     Access: authenticated `get`/`list` where status == 'published', or staff all;
+//             admin `create`/`update`; no `delete`. Modules & lessons: authenticated read, admin write.
+//
+// 18. Collection: quizKeys/{lessonId} (Authoritative Quiz Answer Keys)
+//     Access: STRICTLY SERVER-ONLY (`allow read, write: if false;` for all clients including admins).
+//
+// 19. Collection: cohorts/{cohortId}
+//     Access: authenticated `get`/`list`; admin `create`/`update`; no `delete`.
+//
+// 20. Collection: enrollments/{enrollmentId}
+//     Document ID: `{uid}_{courseId}`
+//     Access: staff or owner (`resource.data.uid == request.auth.uid`) `get`/`list`;
+//             learner `create` ONLY for free enrollments (`source == 'free'`, `status == 'active'`,
+//               `progressPct == 0`, empty `completedLessonIds`); paid/cohort grants are server-only;
+//             learner `update` only while active, with uid/courseId/source/enrolledAt/certificateCode immutable;
+//             no `delete`.
+//
+// 21. Collection: submissions/{submissionId}
+//     Access: staff or owner (`resource.data.uid == request.auth.uid`) `get`/`list`;
+//             learner `create` with `status == 'submitted'`, `passed == false`, no score/gradedBy;
+//             admin `update` for grading (`status in ['graded', 'revision_requested']`,
+//               `gradedBy == request.auth.uid`, `passed is bool`); no `delete`.
+//
+// 22. Collection: certificates/{certificateCode}
+//     Access: public exact-code `get` (`allow get: if true;` — MUST contain ONLY public verification
+//             metadata and NEVER sensitive PII like email/phone/address);
+//             staff or owner `list`; NO client `create`/`update`/`delete` (server-only issuance/revocation).
+//
+// 23. Collection: competencies/{competencyId} (Competency Catalog)
+//     Access: authenticated `get`/`list`; admin `create`/`update`; no `delete`.
+//
+// 24. Collection: integrationEvents/{eventId} (Ecosystem Webhook & Sync Audit Log)
+//     Access: admin or auditor `get`/`list`; NO client `create`/`update`/`delete` (server-only).
+//
+// 25. Collection: aiUsageLogs/{logId}
 //     Document ID: auto-generated server log ID
 //     Access: admin/auditor `get`/`list`; AI proxy `create`; no `update`/`delete`.
 //
@@ -300,8 +332,16 @@ service cloud.firestore {
       return val is string && val.size() >= minLen && val.size() <= maxLen;
     }
 
+    function isStrMax(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
     function isNonEmptyString(val, maxLen) {
       return isValidString(val, 1, maxLen);
+    }
+
+    function isNullOrValidString(val, maxLen) {
+      return val == null || (val is string && val.size() <= maxLen);
     }
 
     function isIntInRange(val, minVal, maxVal) {
@@ -314,6 +354,10 @@ service cloud.firestore {
 
     function isValidList(val, maxSize) {
       return val is list && val.size() <= maxSize;
+    }
+
+    function isValidMapSize(val, maxSize) {
+      return val is map && val.size() <= maxSize;
     }
 
     function isValidEmail(email) {
@@ -345,7 +389,7 @@ service cloud.firestore {
     }
 
     // ===============================================================
-    // Nested Map Validators (Profile & User Telemetry)
+    // Nested Map & Progression Helpers (Profile & User Telemetry)
     // ===============================================================
 
     // Bracket indexing used on 'int' because 'int' is a reserved keyword in CEL.
@@ -357,6 +401,22 @@ service cloud.firestore {
           'apiKey', 'geminiApiKey', 'openaiApiKey',
           'secretKey', 'privateKey', 'accessToken'
         ]);
+    }
+
+    function isDefaultProgressionAxis(data) {
+      return data.get('competencyLevel', 1) == 1 &&
+        data.get('competencyPoints', 0) == 0 &&
+        data.get('businessLevel', 0) == 0 &&
+        data.get('businessStage', 'idea') == 'idea';
+    }
+
+    function isProgressionAxisUnchanged() {
+      let n = request.resource.data;
+      let o = resource.data;
+      return n.get('competencyLevel', 1) == o.get('competencyLevel', 1) &&
+        n.get('competencyPoints', 0) == o.get('competencyPoints', 0) &&
+        n.get('businessLevel', 0) == o.get('businessLevel', 0) &&
+        n.get('businessStage', 'idea') == o.get('businessStage', 'idea');
     }
 
     function isValidUserTelemetry(t) {
@@ -453,6 +513,28 @@ service cloud.firestore {
         isValidString(data.updatedBy, 1, 128);
     }
 
+    function isValidFeatureFlagsConfig(data) {
+      let allowedFields = [
+        'awakeningV2', 'pathways', 'academy', 'businessStudio',
+        'agnesV2', 'serverWallet', 'myValueRedemption', 'ecosystemSync',
+        'cohortAllowlist', 'updatedBy', 'updatedAt'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        data.awakeningV2 is bool &&
+        data.pathways is bool &&
+        data.academy is bool &&
+        data.businessStudio is bool &&
+        data.agnesV2 is bool &&
+        data.serverWallet is bool &&
+        data.myValueRedemption is bool &&
+        data.ecosystemSync is bool &&
+        !(data.myValueRedemption == true && data.serverWallet != true) &&
+        isValidList(data.cohortAllowlist, 100) &&
+        isValidString(data.updatedBy, 0, 128) &&
+        data.updatedAt is timestamp;
+    }
+
     function isValidAiSecretConfig(data) {
       let allowedFields = [
         'baseUrl', 'model', 'apiKey', 'enabled',
@@ -510,13 +592,42 @@ service cloud.firestore {
         (!('telemetry' in data) || isValidUserTelemetry(data.telemetry));
     }
 
+    function isValidPrivacySettings(data, userId) {
+      let allowedFields = [
+        'ownerUid',
+        'shareCoachingProgressWithMentor', 'shareBusinessCanvasesWithMentor',
+        'shareWellnessWithCoach', 'sharePrivateJournalWithAgnes',
+        'shareHealthMetricsWithAgnes', 'shareAggregatedImpactWithEcosystem',
+        'updatedAt'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        hasRequiredFields(allowedFields) &&
+        data.ownerUid is string && data.ownerUid == userId &&
+        data.shareCoachingProgressWithMentor is bool &&
+        data.shareBusinessCanvasesWithMentor is bool &&
+        data.shareWellnessWithCoach is bool &&
+        data.sharePrivateJournalWithAgnes is bool &&
+        data.shareHealthMetricsWithAgnes is bool &&
+        data.shareAggregatedImpactWithEcosystem is bool &&
+        data.updatedAt is timestamp;
+    }
+
     function isValidWorkout(data) {
       return data is map && data.keys().hasOnly(['fatigue', 'pain', 'setReps']) &&
         data.fatigue in ['manageable','tired','very_tired'] && data.pain is bool &&
         isValidString(data.setReps,0,40) && data.setReps.matches('[0-9,]*');
     }
 
-    function isValidProfile(data, userId) {
+    function isValidProgressionAxis(data) {
+      return isIntInRange(data.get('competencyLevel', 1), 1, 10) &&
+        isIntInRange(data.get('competencyPoints', 0), 0, 100000) &&
+        isIntInRange(data.get('businessLevel', 0), 0, 10) &&
+        data.get('businessStage', 'idea') in [
+          'idea', 'discover', 'prototype', 'validate', 'launch', 'grow', 'impact'
+        ];
+    }
+
+    function isValidProfileBase(data, userId) {
       let allowedFields = [
         'ownerUid', 'schemaVersion', 'updatedAt',
         'name', 'gender', 'age', 'height', 'weight',
@@ -533,29 +644,41 @@ service cloud.firestore {
         'career', 'gym',
         'taskStreak', 'workoutStreak', 'longestStreak',
         'longestTaskStreak', 'longestWorkoutStreak',
-        'lastActiveStreakDate', 'lastTaskStreakDate', 'lastWorkoutStreakDate'
+        'lastActiveStreakDate', 'lastTaskStreakDate', 'lastWorkoutStreakDate',
+        'pathwayId', 'purposeStatement', 'awakeningV2Completed',
+        'availableResources', 'preferredActiveDays', 'skillSelfRatings',
+        'competencyLevel', 'competencyPoints', 'businessLevel',
+        'businessStage', 'activeVentureId'
       ];
-      // Keep this schema concisely bounded within the rules expression limit.
+      // Keep this schema concisely bounded well below Firestore's 1,000-expression runtime limit.
       // The player serializer normalizes computed values before writing.
       let keys = data.keys();
       return keys.hasAll(allowedFields) && keys.hasOnly(allowedFields.concat(optionalFields)) &&
-        data.ownerUid == userId && data.schemaVersion is int && data.updatedAt is timestamp &&
+        data.ownerUid == userId && isIntInRange(data.schemaVersion, 1, 4) && data.updatedAt is timestamp &&
         data.gender in ['male', 'female'] &&
-        isValidString(data.name, 0, 100) && isValidString(data.goal, 0, 300) &&
-        isValidString(data.city, 0, 100) && isValidString(data.rewardInterest, 0, 300) &&
-        isValidString(data.profession, 0, 160) && isValidString(data.classTitle, 0, 120) &&
-        isValidString(data.coachAdvice, 0, 1000) && data.targetLevel is int &&
+        isStrMax(data.name, 100) && isStrMax(data.goal, 300) &&
+        isStrMax(data.city, 100) && isStrMax(data.rewardInterest, 300) &&
+        isStrMax(data.profession, 160) && isStrMax(data.classTitle, 120) &&
+        isStrMax(data.coachAdvice, 1000) && data.targetLevel is int &&
         data.age is number && data.height is number && data.weight is number &&
         data.level is int && data.exp is int && data.maxExp is int && data.gold is int &&
         data.streak is int && data.coreCharge is int &&
-        isIntInRange(data.get('taskStreak', 0), 0, 100000) &&
-        isIntInRange(data.get('workoutStreak', 0), 0, 100000) &&
-        isIntInRange(data.get('longestStreak', 0), 0, 100000) &&
-        isIntInRange(data.get('longestTaskStreak', 0), 0, 100000) &&
-        isIntInRange(data.get('longestWorkoutStreak', 0), 0, 100000) &&
-        isValidString(data.get('lastActiveStreakDate', ''), 0, 10) &&
-        isValidString(data.get('lastTaskStreakDate', ''), 0, 10) &&
-        isValidString(data.get('lastWorkoutStreakDate', ''), 0, 10) &&
+        data.get('taskStreak', 0) is int && data.get('workoutStreak', 0) is int &&
+        data.get('longestStreak', 0) is int && data.get('longestTaskStreak', 0) is int &&
+        data.get('longestWorkoutStreak', 0) is int &&
+        isStrMax(data.get('lastActiveStreakDate', ''), 10) &&
+        isStrMax(data.get('lastTaskStreakDate', ''), 10) &&
+        isStrMax(data.get('lastWorkoutStreakDate', ''), 10) &&
+        data.get('pathwayId', 'personal_growth') in [
+          'personal_growth', 'career_accelerator', 'entrepreneur',
+          'sociopreneur', 'community_agriculture', 'global_business'
+        ] &&
+        isStrMax(data.get('purposeStatement', ''), 500) &&
+        data.get('awakeningV2Completed', false) is bool &&
+        isValidList(data.get('availableResources', []), 20) &&
+        isValidList(data.get('preferredActiveDays', []), 7) &&
+        isValidMapSize(data.get('skillSelfRatings', {}), 30) &&
+        isNullOrValidString(data.get('activeVentureId', null), 128) &&
         data.sleepCondition in ['poor', 'moderate', 'optimal'] &&
         data.nutritionCondition in ['deficit', 'balanced', 'high_protein'] &&
         data.bio is map && data.dailyBreakdown is map && data.dailyDurationLog is map &&
@@ -565,10 +688,14 @@ service cloud.firestore {
         isValidList(data.dreamSteps, 50) && isValidList(data.rewards, 50) &&
         isValidList(data.discoveredPerks, 30) && isValidList(data.growthNews, 30) &&
         isValidList(data.groundingSources, 30) &&
-        (!keys.hasAny(['career']) || (data.career is map &&
+        (!('career' in data) || (data.career is map &&
           data.career.keys().hasOnly(['industry','responsibilities','managesTeam','usesSprints','project','projectStatus','lastMeeting','nextAction']))) &&
-        (!keys.hasAny(['gym']) || (data.gym is map &&
+        (!('gym' in data) || (data.gym is map &&
           data.gym.keys().hasOnly(['goal','level','equipment','days','limitations','currentPain'])));
+    }
+
+    function isValidProfile(data, userId) {
+      return isValidProgressionAxis(data) && isValidProfileBase(data, userId);
     }
 
     function isValidJournalEntry(data, entryId) {
@@ -662,6 +789,179 @@ service cloud.firestore {
         data.eventCount == data.events.size();
     }
 
+    function isValidEvidenceDraft(data, userId) {
+      let requiredFields = [
+        'ownerUid', 'dimension', 'targetType', 'targetId',
+        'title', 'summary', 'evidenceKind', 'sourceTag',
+        'reviewStatus', 'createdAt', 'updatedAt'
+      ];
+      return hasRequiredFields(requiredFields) &&
+        hasOnlyAllowedFields(requiredFields.concat(['cohortId', 'artifactUrl'])) &&
+        data.ownerUid is string && data.ownerUid == userId &&
+        data.dimension is string && data.dimension in [
+          'PURPOSE', 'HEALTH', 'SKILLS', 'CAREER', 'BUSINESS', 'FINANCIAL', 'IMPACT'
+        ] &&
+        data.targetType is string && data.targetType in [
+          'dream_step', 'quest', 'assignment', 'business_milestone', 'competency'
+        ] &&
+        isValidString(data.targetId, 1, 128) &&
+        isValidString(data.title, 1, 140) &&
+        isValidString(data.summary, 0, 2000) &&
+        data.evidenceKind is string && data.evidenceKind in [
+          'reflection', 'link', 'file', 'canvas_snapshot', 'interview_log', 'sales_proof'
+        ] &&
+        data.sourceTag == 'validated_evidence' &&
+        data.reviewStatus in ['draft', 'submitted'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        isNullOrValidString(data.get('cohortId', null), 128) &&
+        isValidString(data.get('artifactUrl', ''), 0, 500);
+    }
+
+    function isValidVentureBase(data, userId) {
+      let requiredFields = [
+        'ownerUid', 'name', 'sector', 'pathwayId', 'businessStage',
+        'businessLevel', 'marketplaceStatus', 'summary', 'createdAt', 'updatedAt'
+      ];
+      return hasRequiredFields(requiredFields) &&
+        hasOnlyAllowedFields(requiredFields.concat(['cohortId', 'externalProductId'])) &&
+        data.ownerUid is string && data.ownerUid == userId &&
+        isValidString(data.name, 1, 140) &&
+        isStrMax(data.sector, 100) &&
+        data.pathwayId is string && data.pathwayId in [
+          'personal_growth', 'career_accelerator', 'entrepreneur',
+          'sociopreneur', 'community_agriculture', 'global_business'
+        ] &&
+        data.businessStage is string && data.businessStage in [
+          'idea', 'discover', 'prototype', 'validate', 'launch', 'grow', 'impact'
+        ] &&
+        isIntInRange(data.businessLevel, 0, 10) &&
+        data.marketplaceStatus is string && data.marketplaceStatus in [
+          'not_submitted', 'submitted', 'approved', 'listed', 'rejected'
+        ] &&
+        isStrMax(data.summary, 2000) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        isNullOrValidString(data.get('cohortId', null), 128) &&
+        isNullOrValidString(data.get('externalProductId', null), 128);
+    }
+
+    function isValidVentureCreate(data, userId) {
+      return isValidVentureBase(data, userId) &&
+        data.businessLevel == 0 &&
+        data.businessStage == 'idea' &&
+        data.marketplaceStatus == 'not_submitted';
+    }
+
+    function isValidVentureUpdate(nextData, prevData, userId) {
+      return isValidVentureBase(nextData, userId) &&
+        nextData.businessLevel == prevData.businessLevel &&
+        nextData.businessStage == prevData.businessStage &&
+        (
+          nextData.marketplaceStatus == prevData.marketplaceStatus ||
+          (prevData.marketplaceStatus == 'not_submitted' && nextData.marketplaceStatus == 'submitted')
+        );
+    }
+
+    function isValidCanvasDoc(data, userId, canvasType) {
+      return canvasType in [
+          'personal_development', 'social_problem', 'community_potential',
+          'customer_research', 'value_proposition', 'business_model',
+          'product_prototyping', 'experiment_tracker', 'hpp_pricing',
+          'cash_flow', 'bep', 'marketing_plan', 'operational_planning',
+          'legal_readiness', 'export_readiness', 'social_impact'
+        ] &&
+        data.ownerUid == userId &&
+        data.canvasType == canvasType &&
+        data.updatedAt is timestamp &&
+        data.size() <= 40;
+    }
+
+    function isValidVentureExperiment(data, userId) {
+      return data.ownerUid == userId &&
+        data.status in ['planned', 'running', 'validated', 'invalidated', 'pivoted'] &&
+        data.origin in ['user_input', 'ai_assumption', 'validated_evidence'] &&
+        data.updatedAt is timestamp &&
+        data.size() <= 20 &&
+        isStrMax(data.get('hypothesis', ''), 500) &&
+        isStrMax(data.get('targetMetric', ''), 300) &&
+        isStrMax(data.get('learnings', ''), 2000) &&
+        isStrMax(data.get('nextAction', ''), 500) &&
+        isNullOrValidString(data.get('linkedEvidenceId', null), 128);
+    }
+
+    function isValidCourse(data) {
+      return data.status in ['draft', 'published', 'archived'] &&
+        data.updatedAt is timestamp &&
+        data.size() <= 30 &&
+        isStrMax(data.get('slug', ''), 120) &&
+        isStrMax(data.get('titleId', ''), 200) &&
+        isStrMax(data.get('titleEn', ''), 200);
+    }
+
+    function isValidCohort(data) {
+      return data.status in ['upcoming', 'active', 'completed', 'archived'] &&
+        data.updatedAt is timestamp &&
+        data.size() <= 30 &&
+        isStrMax(data.get('name', ''), 140);
+    }
+
+    function isValidEnrollmentCreate(data, enrollmentId) {
+      return data.uid == request.auth.uid &&
+        isValidString(data.courseId, 1, 128) &&
+        enrollmentId == request.auth.uid + '_' + data.courseId &&
+        data.source == 'free' &&
+        data.status == 'active' &&
+        data.progressPct == 0 &&
+        data.completedLessonIds is list &&
+        data.completedLessonIds.size() == 0 &&
+        !('certificateCode' in data) &&
+        data.enrolledAt is timestamp;
+    }
+
+    function isValidEnrollmentUpdate(nextData, prevData) {
+      return prevData.uid == request.auth.uid &&
+        prevData.status == 'active' &&
+        nextData.uid == prevData.uid &&
+        nextData.courseId == prevData.courseId &&
+        nextData.source == prevData.source &&
+        nextData.enrolledAt == prevData.enrolledAt &&
+        nextData.get('certificateCode', null) == prevData.get('certificateCode', null) &&
+        nextData.status in ['active', 'completed'] &&
+        isValidList(nextData.completedLessonIds, 200) &&
+        isIntInRange(nextData.progressPct, 0, 100);
+    }
+
+    function isValidSubmissionCreate(data) {
+      return data.uid == request.auth.uid &&
+        data.type in ['quiz', 'assignment'] &&
+        data.status == 'submitted' &&
+        data.passed == false &&
+        !('score' in data) &&
+        !('gradedBy' in data) &&
+        !('gradedAt' in data) &&
+        data.submittedAt is timestamp;
+    }
+
+    function isValidSubmissionGrade(nextData, prevData) {
+      return nextData.uid == prevData.uid &&
+        nextData.type == prevData.type &&
+        nextData.submittedAt == prevData.submittedAt &&
+        nextData.status in ['graded', 'revision_requested'] &&
+        nextData.gradedBy == request.auth.uid &&
+        nextData.passed is bool &&
+        (!('score' in nextData) || isNumberInRange(nextData.score, 0, 100)) &&
+        (!('gradedAt' in nextData) || nextData.gradedAt is timestamp) &&
+        isStrMax(nextData.get('feedback', ''), 2000);
+    }
+
+    function isValidCompetencyCatalog(data) {
+      return data.size() <= 30 &&
+        isStrMax(data.get('code', ''), 64) &&
+        isStrMax(data.get('titleId', ''), 160) &&
+        isStrMax(data.get('titleEn', ''), 160);
+    }
+
     // ===============================================================
     // Collection Rules
     // ===============================================================
@@ -693,26 +993,29 @@ service cloud.firestore {
 
     // Non-secret public app configuration (strictly no API keys or partner secrets)
     match /appConfig/{docId} {
-      allow get: if isAuthenticated() && docId in ['aiPublic', 'coinEconomy'];
+      allow get: if isAuthenticated() && docId in ['aiPublic', 'coinEconomy', 'featureFlags'];
       allow list: if isAdmin();
-      allow create, update: if isAdmin() &&
-        docId == 'aiPublic' &&
+      allow create, update: if docId == 'aiPublic' &&
+        isAdmin() &&
         isValidAiPublicConfig(request.resource.data);
-      allow create, update: if isAdmin() &&
-        docId == 'coinEconomy' &&
+      allow create, update: if docId == 'coinEconomy' &&
+        isAdmin() &&
         isValidCoinEconomyConfig(request.resource.data);
+      allow create, update: if docId == 'featureFlags' &&
+        isAdmin() &&
+        isValidFeatureFlagsConfig(request.resource.data);
       allow delete: if false;
     }
 
     // Admin-only secret vaults (never readable by regular users)
     match /adminSecrets/{docId} {
-      allow get: if (isAdmin() || isAIProxy()) && docId == 'aiProvider';
-      allow get: if isAdmin() && docId == 'coinPartner';
-      allow create, update: if isAdmin() &&
-        docId == 'aiProvider' &&
+      allow get: if docId == 'aiProvider' && (isAdmin() || isAIProxy());
+      allow get: if docId == 'coinPartner' && isAdmin();
+      allow create, update: if docId == 'aiProvider' &&
+        isAdmin() &&
         isValidAiSecretConfig(request.resource.data);
-      allow create, update: if isAdmin() &&
-        docId == 'coinPartner' &&
+      allow create, update: if docId == 'coinPartner' &&
+        isAdmin() &&
         isValidCoinPartnerSecret(request.resource.data);
       allow list, delete: if false;
     }
@@ -752,16 +1055,17 @@ service cloud.firestore {
         isValidUserAccount(request.resource.data, userId);
       allow delete: if isAdmin();
 
-      // Main player profile document (owner & staff read; owner CRUD; admin coin/reward update)
+      // Main player profile document (owner & staff read; owner CRUD with 3-Axis lock; admin coin/reward update)
       match /profile/{docId} {
         allow get: if (isOwner(userId) || isStaff()) && docId == 'main';
         allow create: if isOwner(userId) &&
           docId == 'main' &&
-          uidUnchanged(userId) &&
-          isValidProfile(request.resource.data, userId);
+          isDefaultProgressionAxis(request.resource.data) &&
+          isValidProfileBase(request.resource.data, userId);
         allow update: if isOwner(userId) &&
           docId == 'main' &&
           uidNotModified() &&
+          isProgressionAxisUnchanged() &&
           isValidProfile(request.resource.data, userId);
         allow update: if isAdmin() &&
           docId == 'main' &&
@@ -773,17 +1077,31 @@ service cloud.firestore {
         allow delete: if isOwner(userId) && docId == 'main';
       }
 
-      // Check-ins, meals, sleep, moods, workouts & activity logs (owner & staff read; owner writes)
+      // Owner-controlled Privacy & Consent settings (staff may read to honor consent; owner-only writes)
+      match /privacy/{docId} {
+        allow get: if (isOwner(userId) || isStaff()) && docId == 'settings';
+        allow list, delete: if false;
+        allow create: if isOwner(userId) &&
+          docId == 'settings' &&
+          uidUnchanged(userId) &&
+          isValidPrivacySettings(request.resource.data, userId);
+        allow update: if isOwner(userId) &&
+          docId == 'settings' &&
+          uidNotModified() &&
+          isValidPrivacySettings(request.resource.data, userId);
+      }
+
+      // Tier 1 Private: Check-ins, meals, sleep, moods, workouts & activity logs (strictly owner-only)
       match /journal/{entryId} {
-        allow get, list: if isOwner(userId) || isStaff();
+        allow get, list: if isOwner(userId);
         allow create, update: if isOwner(userId) && isValidJournalEntry(request.resource.data, entryId);
         allow delete: if isOwner(userId);
       }
 
-      // Daily progress logs keyed by YYYY-MM-DD (owner & staff read; owner writes)
+      // Tier 1 Private: Daily progress logs keyed by YYYY-MM-DD (strictly owner-only)
       match /dailyLogs/{dateKey} {
-        allow get: if (isOwner(userId) || isStaff()) && isValidDateKey(dateKey);
-        allow list: if isOwner(userId) || isStaff();
+        allow get: if isOwner(userId) && isValidDateKey(dateKey);
+        allow list: if isOwner(userId);
         allow create: if isOwner(userId) &&
           isValidDateKey(dateKey) &&
           uidUnchanged(userId) &&
@@ -818,9 +1136,9 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
-      // Synced calendar summary (owner & staff read; owner writes on 'latest')
+      // Tier 1 Private: Synced calendar summary (strictly owner-only on 'latest')
       match /calendar/{docId} {
-        allow get, list: if isOwner(userId) || isStaff();
+        allow get, list: if isOwner(userId) && docId == 'latest';
         allow create: if isOwner(userId) &&
           docId == 'latest' &&
           uidUnchanged(userId) &&
@@ -831,6 +1149,154 @@ service cloud.firestore {
           isValidCalendarSummary(request.resource.data, userId);
         allow delete: if isOwner(userId) && docId == 'latest';
       }
+
+      // Server-authoritative wallet balance (read-only for owner, admin, auditor; Admin SDK writes only)
+      match /wallet/{docId} {
+        allow get: if (isOwner(userId) || staffRole() in ['admin', 'auditor']) && docId == 'main';
+        allow list, create, update, delete: if false;
+      }
+
+      // Server-authoritative idempotent wallet ledger (read-only for owner, admin, auditor)
+      match /walletLedger/{eventKey} {
+        allow get, list: if isOwner(userId) || staffRole() in ['admin', 'auditor'];
+        allow create, update, delete: if false;
+      }
+
+      // Evidence Vault (owner & staff read; owner draft/submit lifecycle only; never self-approved)
+      match /evidence/{evidenceId} {
+        allow get, list: if isOwner(userId) || isStaff();
+        allow create: if isOwner(userId) &&
+          uidUnchanged(userId) &&
+          isValidEvidenceDraft(request.resource.data, userId);
+        allow update: if isOwner(userId) &&
+          uidNotModified() &&
+          resource.data.reviewStatus in ['draft', 'revision_requested'] &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          isValidEvidenceDraft(request.resource.data, userId);
+        allow delete: if isOwner(userId) && resource.data.reviewStatus == 'draft';
+      }
+
+      // Business Studio Ventures (owner CRUD with stage/level/marketplace anti-tampering; staff read)
+      match /ventures/{ventureId} {
+        allow get, list: if isOwner(userId) || isStaff();
+        allow create: if isOwner(userId) &&
+          uidUnchanged(userId) &&
+          isValidVentureCreate(request.resource.data, userId);
+        allow update: if isOwner(userId) &&
+          uidNotModified() &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          isValidVentureUpdate(request.resource.data, resource.data, userId);
+        allow delete: if isOwner(userId);
+
+        // 16 Business Studio canvases (strict canvasType allowlist)
+        match /canvases/{canvasType} {
+          allow get, list: if isOwner(userId) || isStaff();
+          allow create: if isOwner(userId) &&
+            uidUnchanged(userId) &&
+            isValidCanvasDoc(request.resource.data, userId, canvasType);
+          allow update: if isOwner(userId) &&
+            uidNotModified() &&
+            isValidCanvasDoc(request.resource.data, userId, canvasType);
+          allow delete: if isOwner(userId);
+        }
+
+        // Business validation experiments (strict status & evidence origin tags)
+        match /experiments/{expId} {
+          allow get, list: if isOwner(userId) || isStaff();
+          allow create: if isOwner(userId) &&
+            uidUnchanged(userId) &&
+            isValidVentureExperiment(request.resource.data, userId);
+          allow update: if isOwner(userId) &&
+            uidNotModified() &&
+            isValidVentureExperiment(request.resource.data, userId);
+          allow delete: if isOwner(userId);
+        }
+
+        // Real-world marketplace order & settlement feedback (server-only from sociopreneur.online webhooks)
+        match /marketFeedback/{eventId} {
+          allow get, list: if isOwner(userId) || isStaff();
+          allow create, update, delete: if false;
+        }
+      }
+
+      // Server-verified learner competencies (owner & staff read; server-only awards)
+      match /competencies/{competencyId} {
+        allow get, list: if isOwner(userId) || isStaff();
+        allow create, update, delete: if false;
+      }
+    }
+
+    // ===============================================================
+    // LevelUp Academy Collections (Phase 2)
+    // ===============================================================
+
+    // Courses catalog (learners read published only; staff read all; admin create/update)
+    match /courses/{courseId} {
+      allow get, list: if (isAuthenticated() && resource.data.status == 'published') || isStaff();
+      allow create, update: if isAdmin() && isValidCourse(request.resource.data);
+      allow delete: if false;
+
+      match /modules/{moduleId} {
+        allow get, list: if isAuthenticated();
+        allow create, update, delete: if isAdmin();
+
+        match /lessons/{lessonId} {
+          allow get, list: if isAuthenticated();
+          allow create, update, delete: if isAdmin();
+        }
+      }
+    }
+
+    // Authoritative quiz answer keys (strictly server-only; never readable by any client)
+    match /quizKeys/{lessonId} {
+      allow read, write: if false;
+    }
+
+    // Learning cohorts (authenticated read; admin create/update)
+    match /cohorts/{cohortId} {
+      allow get, list: if isAuthenticated();
+      allow create, update: if isAdmin() && isValidCohort(request.resource.data);
+      allow delete: if false;
+    }
+
+    // Course enrollments (free self-enrollment only; paid & cohort grants are server-only)
+    match /enrollments/{enrollmentId} {
+      allow get, list: if isStaff() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create: if isAuthenticated() && isValidEnrollmentCreate(request.resource.data, enrollmentId);
+      allow update: if isAuthenticated() && isValidEnrollmentUpdate(request.resource.data, resource.data);
+      allow delete: if false;
+    }
+
+    // Quiz & practical assignment submissions (learners submit ungraded; admin grades)
+    match /submissions/{submissionId} {
+      allow get, list: if isStaff() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create: if isAuthenticated() && isValidSubmissionCreate(request.resource.data);
+      allow update: if isAdmin() && isValidSubmissionGrade(request.resource.data, resource.data);
+      allow delete: if false;
+    }
+
+    // Public verification certificates (exact-code public get; owner/staff list; server-only writes)
+    match /certificates/{certificateCode} {
+      allow get: if true;
+      allow list: if isStaff() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    // Competency catalog (authenticated read; admin create/update)
+    match /competencies/{competencyId} {
+      allow get, list: if isAuthenticated();
+      allow create, update: if isAdmin() && isValidCompetencyCatalog(request.resource.data);
+      allow delete: if false;
+    }
+
+    // ===============================================================
+    // Ecosystem Integration & Audit Logs (Phase 4)
+    // ===============================================================
+
+    // Ecosystem webhook & sync audit log (admin/auditor read-only; strictly server-written)
+    match /integrationEvents/{eventId} {
+      allow get, list: if staffRole() in ['admin', 'auditor'];
+      allow create, update, delete: if false;
     }
 
     // Server-written AI usage audit logs (admin/auditor read-only; AI proxy create)

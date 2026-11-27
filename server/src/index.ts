@@ -5,6 +5,14 @@ import dotenv from 'dotenv';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
 import admin from 'firebase-admin';
+import { createAgnesV2Router, isAllowedUpstreamAiUrl } from './v2/agnesV2Router.js';
+import { createWalletRouter } from './v2/walletRouter.js';
+import { createEcosystemRouter } from './v2/ecosystemRouter.js';
+import {
+  createFirestoreEcosystemStore,
+  createFirestoreWalletStore,
+  readUserPrivacyConsent,
+} from './v2/v2Adapters.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(__dirname, '..');
@@ -264,8 +272,12 @@ async function verifyFirebaseBearerToken(token: string): Promise<VerifiedUser> {
     let isAdmin = Boolean(email && email === ADMIN_EMAIL && emailVerified);
 
     if (!isAdmin && firestoreAdmin) {
-      const adminDoc = await firestoreAdmin.doc(`admins/${decoded.uid}`).get();
+      const [adminDoc, emailGrant] = await Promise.all([
+        firestoreAdmin.doc(`admins/${decoded.uid}`).get(),
+        email && emailVerified ? firestoreAdmin.doc(`adminEmails/${email}`).get() : Promise.resolve(null),
+      ]);
       if (adminDoc.exists) isAdmin = true;
+      if (emailGrant?.exists && (emailGrant.data()?.role || 'admin') === 'admin') isAdmin = true;
     }
 
     return {
@@ -358,15 +370,31 @@ function requireAdmin(req: AuthedRequest, res: Response, next: NextFunction): vo
 // EXPRESS APP & ROUTES
 // =========================================================================
 const app = express();
-app.use(express.json({ limit: '256kb' }));
+app.use(
+  express.json({
+    limit: '256kb',
+    verify: (req, _res, buf) => {
+      (req as Request & { rawBody?: string }).rawBody = buf.toString('utf8');
+    },
+  })
+);
 
-const allowedOriginsRaw = (process.env.ALLOWED_ORIGINS || '*').trim();
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://levelup.sociopreneur.online',
+  'https://go-levelup.sociopreneur.online',
+  'http://localhost:5173',
+  'http://localhost:4173',
+];
+const allowedOriginsRaw = (process.env.ALLOWED_ORIGINS || '').trim();
+const allowedOrigins =
+  allowedOriginsRaw === '*'
+    ? true
+    : allowedOriginsRaw
+      ? allowedOriginsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+      : DEFAULT_ALLOWED_ORIGINS;
 app.use(
   cors({
-    origin:
-      allowedOriginsRaw === '*'
-        ? true
-        : allowedOriginsRaw.split(',').map((s) => s.trim()).filter(Boolean),
+    origin: allowedOrigins,
     credentials: true,
   })
 );
@@ -407,8 +435,8 @@ app.post('/api/admin/config', requireAuth, requireAdmin, async (req: AuthedReque
   const body = req.body as Partial<ServerAIConfig>;
 
   const baseUrl = (body.baseUrl ?? prev.baseUrl).trim();
-  if (!/^https?:\/\/.+/.test(baseUrl)) {
-    res.status(400).json({ error: 'Invalid baseUrl (must start with http:// or https://)' });
+  if (!isAllowedUpstreamAiUrl(baseUrl)) {
+    res.status(400).json({ error: 'Invalid or disallowed baseUrl (must be an approved HTTPS AI provider host).' });
     return;
   }
 
@@ -472,6 +500,10 @@ app.post('/api/admin/test-ai', requireAuth, requireAdmin, async (req: AuthedRequ
   const current = await getServerAIConfig();
   const body = req.body as Partial<ServerAIConfig>;
   const baseUrl = (body.baseUrl || current.baseUrl).replace(/\/+$/, '');
+  if (!isAllowedUpstreamAiUrl(baseUrl)) {
+    res.status(400).json({ ok: false, error: 'Disallowed AI provider URL (SSRF protection active).' });
+    return;
+  }
   const model = (body.model || current.model).trim() || 'agnes-2.5-flash';
   const apiKey = (body.apiKey && body.apiKey.trim()) || current.apiKey;
 
@@ -712,6 +744,43 @@ app.post('/api/ai/chat', requireAuth, async (req: AuthedRequest, res: Response) 
     });
   }
 });
+
+// =========================================================================
+// LEVELUP 2.0 ROUTES (STAGE 9 AGNES AI 2.0, STAGE 10 WALLET, STAGE 11 ECOSYSTEM)
+// =========================================================================
+const walletStore = createFirestoreWalletStore(firestoreAdmin);
+const ecosystemStore = createFirestoreEcosystemStore(firestoreAdmin);
+
+app.use(
+  '/v1/ai',
+  createAgnesV2Router({
+    requireAuth,
+    getPrivacyConsent: (uid) => readUserPrivacyConsent(firestoreAdmin, uid),
+    getAiConfig: getServerAIConfig,
+    consumeQuota: async (uid, email, dailyLimit) =>
+      checkAndIncrementQuota({ uid, email, emailVerified: true, displayName: email, isAdmin: false }, dailyLimit),
+    recordAudit: recordAuditLog,
+  })
+);
+
+app.use(
+  '/v1/wallet',
+  createWalletRouter({
+    requireAuth,
+    requireAdmin,
+    store: walletStore,
+    partnerWebhookSecret: () => (process.env.MYVALUE_WEBHOOK_SECRET || '').trim(),
+  })
+);
+
+app.use(
+  '/v1/integrations',
+  createEcosystemRouter({
+    requireAuth,
+    ecosystemSharedSecret: () => (process.env.SOCIOPRENEUR_WEBHOOK_SECRET || '').trim(),
+    store: ecosystemStore,
+  })
+);
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[LEVEL UP AI Proxy] Running on http://localhost:${PORT} (Admin: ${ADMIN_EMAIL})`);

@@ -30,7 +30,7 @@ interface HeaderProps {
   canInstallPWA: boolean;
   onInstallPWA: () => void;
   onOpenScience: () => void;
-  onOpenSettings: (tab?: 'ai' | 'cloud' | 'app') => void;
+  onOpenSettings: (tab?: 'ai' | 'cloud' | 'privacy' | 'app') => void;
   onOpenReset: () => void;
   onOpenProfile: () => void;
 }

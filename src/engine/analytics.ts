@@ -9,6 +9,7 @@ import type {
 import type { CheckIn, JournalEntry, LoggedActivity } from './journal';
 import { getCurrentDreamSteps } from './coaching';
 import { getEffectiveStreak, getTodayDateKey } from './science';
+import { DEFAULT_USER_PRIVACY_SETTINGS, type UserPrivacySettings } from './v2/privacy';
 
 export interface ParticipantHabitAnalysis {
   activeDaysCount: number;
@@ -100,20 +101,24 @@ export function buildUserTelemetrySummary(
   player: PlayerProfile,
   journal: JournalEntry[],
   dailyLogs: DailyLogEntry[],
-  today = getTodayDateKey()
+  today = getTodayDateKey(),
+  privacy: UserPrivacySettings = DEFAULT_USER_PRIVACY_SETTINGS
 ): UserTelemetrySummary {
   const checkIns = journal
     .filter((entry): entry is CheckIn => entry.kind === 'checkin')
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const activities = journal.filter((entry): entry is LoggedActivity => entry.kind === 'activity');
 
-  const latestMood = checkIns.find((c) => c.mood)?.mood || '';
-  const latestEnergy = checkIns.find((c) => c.energy)?.energy || '';
-  const latestSleep = checkIns.find((c) => c.sleepHours !== null)?.sleepHours ?? null;
+  // Privacy-by-Default (SEC-02): do not expose private mood, sleep, energy, or pain flags
+  // in global user directory telemetry unless the participant explicitly opted in.
+  const shareWellness = Boolean(privacy.shareWellnessWithCoach);
+  const latestMood = shareWellness ? checkIns.find((c) => c.mood)?.mood || '' : '';
+  const latestEnergy = shareWellness ? checkIns.find((c) => c.energy)?.energy || '' : '';
+  const latestSleep = shareWellness ? checkIns.find((c) => c.sleepHours !== null)?.sleepHours ?? null : null;
 
   const recentWorkouts = activities.filter((a) => a.category === 'FITNESS' && a.workout);
   const latestWorkout = [...recentWorkouts].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-  const hasPainAlert = Boolean(
+  const hasPainAlert = shareWellness && Boolean(
     player.gym?.currentPain ||
       (latestWorkout?.workout?.pain && Date.now() - latestWorkout.updatedAt <= 7 * 86400000)
   );

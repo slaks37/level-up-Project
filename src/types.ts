@@ -1,3 +1,7 @@
+import type { DevelopmentDimension } from './engine/v2/dimensions';
+import type { PathwayId } from './engine/v2/pathways';
+import type { BusinessStageCode } from './engine/v2/progression';
+
 export type Language = 'id' | 'en';
 export type Gender = 'male' | 'female';
 export type SleepCondition = 'poor' | 'moderate' | 'optimal';
@@ -74,6 +78,7 @@ export interface Quest {
   id: string;
   title: string;
   category: QuestCategory;
+  dimension?: DevelopmentDimension;
   unitType: QuestUnitType;
   defaultQty: number;
   estMinutes?: number;
@@ -85,11 +90,15 @@ export interface Quest {
   completedQty?: number;
   completedRpe?: number;
   workout?: WorkoutTarget;
+  evidenceRequired?: boolean;
 }
 
 export interface DreamStep {
   id: string;
   archived?: boolean;
+  pathwayId?: PathwayId;
+  stageCode?: string;
+  dimension?: DevelopmentDimension;
   phase: string;
   title: string;
   coachTip: string;
@@ -103,6 +112,9 @@ export interface DreamStep {
   skillName: string;
   completed: boolean;
   rewarded?: boolean;
+  evidenceRequirement?: string;
+  evidenceStatus?: 'none' | 'submitted' | 'approved' | 'revision_requested';
+  linkedCanvasTypes?: string[];
 }
 
 export interface PermanentSkill {
@@ -203,6 +215,18 @@ export interface PlayerProfile {
   growthNews: GrowthNewsItem[];
   groundingSources: GroundingSource[];
   boss: BossMeta;
+  // Additive LevelUp 2.0 optional fields (schemaVersion 4)
+  pathwayId?: PathwayId;
+  purposeStatement?: string;
+  awakeningV2Completed?: boolean;
+  availableResources?: string[];
+  preferredActiveDays?: number[];
+  skillSelfRatings?: Record<string, number>;
+  competencyLevel?: number;
+  competencyPoints?: number;
+  businessLevel?: number;
+  businessStage?: BusinessStageCode;
+  activeVentureId?: string | null;
 }
 
 export interface DailyLogEntry {
