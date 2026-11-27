@@ -77,6 +77,12 @@ import {
 import { DEFAULT_FEATURE_FLAGS, isFeatureEnabled, type FeatureFlagsConfig } from './services/featureFlags';
 import type { UserPrivacySettings } from './engine/v2/privacy';
 import { loadLocalPrivacySettings, saveLocalPrivacySettings } from './services/privacyStorage';
+import {
+  clearSelectedPersona,
+  getSelectedPersona,
+  saveSelectedPersona,
+  trackHomepageEvent,
+} from './services/homepageEvents';
 import { createPathwayDreamSteps } from './engine/v2/pathways';
 import type { DevelopmentDimension } from './engine/v2/dimensions';
 import {
@@ -204,6 +210,7 @@ export default function App() {
   const [authResolved, setAuthResolved] = useState(false);
   const [showAuthScreen, setShowAuthScreen] = useState(false);
   const [authInitialMode, setAuthInitialMode] = useState<'login' | 'register'>('login');
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(() => getSelectedPersona());
   const [isAdminView, setIsAdminView] = useState<boolean>(
     () => isDedicatedAdminHost || isAdminPath(window.location.pathname)
   );
@@ -636,8 +643,15 @@ export default function App() {
     }
   };
 
-  const handleCompleteAwakening = (input: CreateProfileInput) =>
+  const handleCompleteAwakening = (input: CreateProfileInput) => {
+    trackHomepageEvent('registration_completed', {
+      profession_id: input.selectedPreset?.id || 'custom',
+      persona_id: selectedPersonaId || 'none',
+    });
+    clearSelectedPersona();
+    setSelectedPersonaId(null);
     void startProfile(createInitialPlayerProfile(input, coinConfigRef.current));
+  };
 
   // =========================================================================
   // GAMEPLAY & PROGRESS HANDLERS
@@ -1389,7 +1403,6 @@ export default function App() {
   const availableDeviceProfile = cloudUser && cloudProfileReady && !player ? loadLocalPlayer(lang) : null;
   const shouldShowLandingHome =
     isFirebaseReady() &&
-    authResolved &&
     !cloudUser &&
     !isAdminView &&
     !showAuthScreen;
@@ -1401,26 +1414,28 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Header
-        lang={lang}
-        onChangeLang={handleChangeLang}
-        hasPlayer={Boolean(player)}
-        syncStatus={syncStatus}
-        cloudUser={cloudUser}
-        canAccessAdmin={canAccessAdmin}
-        isAdminView={isAdminView}
-        onToggleAdminView={() => navigateAdminView(!isAdminView)}
-        onOpenAuthScreen={() => {
-          setAuthInitialMode('login');
-          setShowAuthScreen(true);
-        }}
-        canInstallPWA={!isDedicatedAdminHost && Boolean(installPrompt)}
-        onInstallPWA={() => void handleInstallPWA()}
-        onOpenScience={() => setModal({ type: 'science' })}
-        onOpenSettings={(tab = 'ai') => setModal({ type: 'settings', tab })}
-        onOpenReset={() => setModal({ type: 'reset' })}
-        onOpenProfile={() => setModal({ type: 'editBio' })}
-      />
+      {!shouldShowLandingHome && (
+        <Header
+          lang={lang}
+          onChangeLang={handleChangeLang}
+          hasPlayer={Boolean(player)}
+          syncStatus={syncStatus}
+          cloudUser={cloudUser}
+          canAccessAdmin={canAccessAdmin}
+          isAdminView={isAdminView}
+          onToggleAdminView={() => navigateAdminView(!isAdminView)}
+          onOpenAuthScreen={() => {
+            setAuthInitialMode('login');
+            setShowAuthScreen(true);
+          }}
+          canInstallPWA={!isDedicatedAdminHost && Boolean(installPrompt)}
+          onInstallPWA={() => void handleInstallPWA()}
+          onOpenScience={() => setModal({ type: 'science' })}
+          onOpenSettings={(tab = 'ai') => setModal({ type: 'settings', tab })}
+          onOpenReset={() => setModal({ type: 'reset' })}
+          onOpenProfile={() => setModal({ type: 'editBio' })}
+        />
+      )}
 
       {/* Optional Admin Broadcast Notice */}
       {sharedAIConfig?.maintenanceNotice && !isAdminView && !shouldShowAuthGate && (
@@ -1430,25 +1445,18 @@ export default function App() {
       )}
 
       <main
-        className={`flex-grow w-full mx-auto px-3 sm:px-6 py-4 sm:py-5 ${
-          shouldShowLandingHome ? '' : 'max-w-7xl'
+        className={`flex-grow w-full mx-auto ${
+          shouldShowLandingHome ? 'p-0' : 'max-w-7xl px-3 sm:px-6 py-4 sm:py-5'
         } ${
           player && !isAdminView && !shouldShowAuthGate && !shouldShowLandingHome ? 'pb-24 lg:pb-8' : ''
         }`}
       >
-        {isFirebaseReady() && !authResolved ? (
-          <div className="max-w-md mx-auto py-16 text-center space-y-2">
-            <div className="w-8 h-8 border-2 border-sky-600 border-t-transparent rounded-full animate-spin mx-auto" />
-            <p className="font-mono text-xs text-slate-600">
-              {lang === 'id' ? 'Memeriksa sesi akun Cloud...' : 'Checking Cloud session...'}
-            </p>
-          </div>
-        ) : shouldShowLandingHome ? (
+        {shouldShowLandingHome ? (
           <Suspense
             fallback={
-              <div className="max-w-md mx-auto py-16 text-center space-y-2">
-                <div className="w-8 h-8 border-2 border-amber-600 border-t-transparent rounded-full animate-spin mx-auto" />
-                <p className="font-mono text-xs text-slate-600">
+              <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center gap-3 text-slate-200">
+                <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                <p className="font-mono text-xs text-slate-400">
                   {lang === 'id' ? 'Memuat Beranda Level Up...' : 'Loading Level Up Home...'}
                 </p>
               </div>
@@ -1456,13 +1464,30 @@ export default function App() {
           >
             <LandingHomepage
               lang={lang}
-              onOpenAuth={(mode) => {
+              onChangeLang={handleChangeLang}
+              onOpenAuth={(mode, personaId) => {
+                if (personaId) {
+                  saveSelectedPersona(personaId);
+                  setSelectedPersonaId(personaId);
+                }
+                if (mode === 'register') {
+                  trackHomepageEvent('registration_started', {
+                    persona_id: personaId || selectedPersonaId || 'none',
+                  });
+                }
                 setAuthInitialMode(mode);
                 setShowAuthScreen(true);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
             />
           </Suspense>
+        ) : isFirebaseReady() && !authResolved ? (
+          <div className="max-w-md mx-auto py-16 text-center space-y-2">
+            <div className="w-8 h-8 border-2 border-sky-600 border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="font-mono text-xs text-slate-600">
+              {lang === 'id' ? 'Memeriksa sesi akun Cloud...' : 'Checking Cloud session...'}
+            </p>
+          </div>
         ) : shouldShowAuthGate ? (
           <AuthView
             key={authInitialMode}
@@ -1530,6 +1555,7 @@ export default function App() {
             <AwakeningView
               lang={lang}
               isCloudLoggedIn={Boolean(cloudUser)}
+              initialPersonaId={selectedPersonaId}
               onOpenCloudLogin={() => setShowAuthScreen(true)}
               onCompleteAwakening={handleCompleteAwakening}
             />

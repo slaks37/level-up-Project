@@ -15,10 +15,12 @@ import { calculateBiometrics, playSFX, type CreateProfileInput } from '../engine
 
 import { CareerFields, GymFields } from './CoachPanels';
 import { defaultCareer, defaultGym } from '../engine/coaching';
+import { PERSONA_PATHS } from '../data/homepageContent';
 
 interface AwakeningViewProps {
   lang: Language;
   isCloudLoggedIn: boolean;
+  initialPersonaId?: string | null;
   onOpenCloudLogin: () => void;
   onCompleteAwakening: (input: CreateProfileInput) => void;
 }
@@ -26,9 +28,21 @@ interface AwakeningViewProps {
 export const AwakeningView: React.FC<AwakeningViewProps> = ({
   lang,
   isCloudLoggedIn,
+  initialPersonaId,
   onOpenCloudLogin,
   onCompleteAwakening,
 }) => {
+  const matchedPersona = useMemo(
+    () => PERSONA_PATHS.find((p) => p.id === initialPersonaId) || null,
+    [initialPersonaId]
+  );
+  const initialPreset = useMemo(() => {
+    if (!matchedPersona) return PROFESSIONS_DB[0];
+    return (
+      PROFESSIONS_DB.find((p) => p.id === matchedPersona.professionPresetId) || PROFESSIONS_DB[0]
+    );
+  }, [matchedPersona]);
+
   const [career, setCareer] = useState(defaultCareer);
   const [gym, setGym] = useState(defaultGym);
   const [name, setName] = useState('');
@@ -38,13 +52,15 @@ export const AwakeningView: React.FC<AwakeningViewProps> = ({
   const [weight, setWeight] = useState(65);
   const [city, setCity] = useState('Surabaya');
   const [rewardInterest, setRewardInterest] = useState('');
-  const [goal, setGoal] = useState('');
+  const [goal, setGoal] = useState(() => matchedPersona?.suggestedGoal || '');
   const [targetLevel, setTargetLevel] = useState(15);
   const [dailyBudget, setDailyBudget] = useState(150);
 
   const [profSearch, setProfSearch] = useState('');
-  const [profCat, setProfCat] = useState<'ALL' | 'AGRI' | 'BIZ' | 'TECH' | 'EDU'>('ALL');
-  const [selectedPreset, setSelectedPreset] = useState<ProfessionPreset>(PROFESSIONS_DB[0]);
+  const [profCat, setProfCat] = useState<'ALL' | 'AGRI' | 'BIZ' | 'TECH' | 'EDU'>(
+    () => matchedPersona?.presetCategory || 'ALL'
+  );
+  const [selectedPreset, setSelectedPreset] = useState<ProfessionPreset>(() => initialPreset);
   const [isCustomProf, setIsCustomProf] = useState(false);
   const [customProfName, setCustomProfName] = useState('');
 
