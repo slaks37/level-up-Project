@@ -506,6 +506,12 @@ export const DailyTasksPanel: React.FC<{
 }) => {
   const taskStreak = getEffectiveStreak(player.taskStreak, player.lastTaskStreakDate);
   const workoutStreak = getEffectiveStreak(player.workoutStreak, player.lastWorkoutStreakDate);
+  const careerTasks = player.quests.filter((q) => q.category === 'CAREER' && !q.dreamStepId);
+  const careerDone = careerTasks.filter((q) => q.completed).length;
+  const dreamTasks = player.quests.filter((q) => Boolean(q.dreamStepId));
+  const dreamDone = dreamTasks.filter((q) => q.completed).length;
+  const careerSuggestion = focus?.suggestions.find((s) => s.track === 'career');
+  const dreamSuggestion = focus?.suggestions.find((s) => s.track === 'dream');
   const bd = player.dailyBreakdown;
   const log = player.dailyDurationLog;
   const doneTotal = (log.study || 0) + (log.work || 0) + (log.fitness || 0);
@@ -550,7 +556,53 @@ export const DailyTasksPanel: React.FC<{
 
       <div className="p-4 flex-grow flex flex-col justify-between">
         <div>
-          <p className="text-xs text-slate-600 mb-3">{tr(lang, 'questBoardHint')}</p>
+          <p className="text-xs text-slate-600 mb-2.5">{tr(lang, 'questBoardHint')}</p>
+
+          {/* Dual-Track Indicator: Career + Dream running together */}
+          <div className="mb-3 grid grid-cols-2 gap-2 text-[11px]">
+            <div className={`rounded border p-2 ${careerTasks.length > 0 ? 'border-sky-200 bg-sky-50/70' : 'border-slate-200 bg-slate-50'}`}>
+              <div className="flex items-center justify-between gap-1 font-bold text-sky-950">
+                <span>💼 {lang === 'id' ? 'Jalur Karier' : 'Career Track'}</span>
+                <span className="font-mono text-[10px] text-sky-800">{careerDone}/{careerTasks.length}</span>
+              </div>
+              {careerTasks.length > 0 ? (
+                <p className="text-[10px] text-sky-800 mt-0.5">
+                  {careerDone > 0 ? (lang === 'id' ? '✓ Berjalan hari ini' : '✓ Progressing today') : (lang === 'id' ? 'Siap dikerjakan' : 'Ready in list')}
+                </p>
+              ) : careerSuggestion ? (
+                <button
+                  type="button"
+                  onClick={() => onAddSuggestion(careerSuggestion)}
+                  className="mt-1 text-[10px] font-bold text-sky-800 underline"
+                >
+                  {lang === 'id' ? '+ Tambah 1 tugas karier' : '+ Add 1 career task'}
+                </button>
+              ) : (
+                <p className="text-[10px] text-slate-500 mt-0.5">{lang === 'id' ? 'Belum ada di daftar' : 'None listed yet'}</p>
+              )}
+            </div>
+            <div className={`rounded border p-2 ${dreamTasks.length > 0 ? 'border-orange-200 bg-orange-50/70' : 'border-slate-200 bg-slate-50'}`}>
+              <div className="flex items-center justify-between gap-1 font-bold text-orange-950">
+                <span>🎯 {lang === 'id' ? 'Jalur Impian' : 'Dream Track'}</span>
+                <span className="font-mono text-[10px] text-orange-800">{dreamDone}/{dreamTasks.length}</span>
+              </div>
+              {dreamTasks.length > 0 ? (
+                <p className="text-[10px] text-orange-800 mt-0.5">
+                  {dreamDone > 0 ? (lang === 'id' ? '✓ Dikejar hari ini' : '✓ Pursued today') : (lang === 'id' ? 'Siap dikejar' : 'Ready to pursue')}
+                </p>
+              ) : dreamSuggestion ? (
+                <button
+                  type="button"
+                  onClick={() => onAddSuggestion(dreamSuggestion)}
+                  className="mt-1 text-[10px] font-bold text-orange-800 underline"
+                >
+                  {lang === 'id' ? '+ Tambah 1 langkah impian' : '+ Add 1 dream step'}
+                </button>
+              ) : (
+                <p className="text-[10px] text-slate-500 mt-0.5">{lang === 'id' ? 'Belum ada di daftar' : 'None listed yet'}</p>
+              )}
+            </div>
+          </div>
 
           {focus && <section className="mb-3 space-y-2 rounded border border-sky-200 bg-sky-50 p-2.5 text-xs">
             <h3 className="font-bold text-sky-950">{lang === 'id' ? 'Fokus hari ini' : 'Today’s focus'}</h3>
@@ -687,14 +739,24 @@ export const DailyTasksPanel: React.FC<{
 
                   <div className="flex-grow min-w-0">
                     <div className="flex items-center justify-between gap-1.5">
-                      <span
-                        className={`font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border ${categoryBadge(q.category)}`}
-                      >
-                        {q.category} •{' '}
-                        {q.completed && q.completedQty ? q.completedQty : q.defaultQty}{' '}
-                        {q.workout && !q.completed ? `REPS · ${q.workout.sets} × ${q.workout.reps}` : q.unitType === 'REPS' ? 'REPS' : lang === 'id' ? 'MNT' : 'MIN'}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span
+                          className={`font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border ${categoryBadge(q.category)}`}
+                        >
+                          {q.category} •{' '}
+                          {q.completed && q.completedQty ? q.completedQty : q.defaultQty}{' '}
+                          {q.workout && !q.completed ? `REPS · ${q.workout.sets} × ${q.workout.reps}` : q.unitType === 'REPS' ? 'REPS' : lang === 'id' ? 'MNT' : 'MIN'}
+                        </span>
+                        {q.dreamStepId && (
+                          <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 border border-orange-300">
+                            🎯 {lang === 'id' ? 'IMPIAN' : 'DREAM'}
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <span className="font-mono text-[9px] font-bold text-sky-700">
+                          +{q.exp} EXP
+                        </span>
                         <span className="font-mono text-[9px] font-bold text-amber-700">
                           +{q.category === 'FITNESS' ? coinConfig.pointPerWorkout : coinConfig.pointPerTask} {coinConfig.coinSymbol}
                         </span>

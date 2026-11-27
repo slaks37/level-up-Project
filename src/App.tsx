@@ -76,10 +76,10 @@ import { MobileNav } from './components/MobileNav';
 import { AuthView } from './components/AuthView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AwakeningView } from './components/AwakeningView';
-import { getActiveDreamStep, getCurrentDreamSteps, getRoadmapActions, planDailyFocus, type DailyTaskSuggestion } from './engine/coaching';
+import { buildCapturedTargetPlan, getActiveDreamStep, getCurrentDreamSteps, getRoadmapActions, planDailyFocus, type DailyTaskSuggestion } from './engine/coaching';
 import type { CalendarEvent } from './services/googleCalendar';
 import { CareerCoach, CoachSetupModal, GymCoach } from './components/CoachPanels';
-import { BodyConditionPanel, DailyCheckInModal, DailyReflectionCard, NutritionPanel } from './components/JournalPanels';
+import { BodyConditionPanel, DailyCheckInModal, DailyReflectionCard, NutritionPanel, type CheckInCaptureOptions } from './components/JournalPanels';
 import { getDailyEvidence, getGrowthActions, getJournalMoment, mergeJournal, type CheckIn, type CheckInInput, type DayPhase } from './engine/journal';
 import { createDailyReflection } from './engine/reflection';
 import { loadGuestJournal, useJournal } from './services/useJournal';
@@ -669,16 +669,16 @@ export default function App() {
         playSFX('levelup');
         notify(
           lang === 'id'
-            ? `LEVEL UP! Kamu naik ke Level ${nextPlayer.level}!${levelUpGold > 0 ? ` (+${levelUpGold} ${symbol})` : ''}${streakNote}`
-            : `LEVEL UP! You reached Level ${nextPlayer.level}!${levelUpGold > 0 ? ` (+${levelUpGold} ${symbol})` : ''}${streakNote}`,
+            ? `LEVEL UP! Kamu naik ke Level ${nextPlayer.level}! (+${result.expEarned} EXP • +${result.goldEarned + levelUpGold} ${symbol})${streakNote}`
+            : `LEVEL UP! You reached Level ${nextPlayer.level}! (+${result.expEarned} EXP • +${result.goldEarned + levelUpGold} ${symbol})${streakNote}`,
           'success'
         );
       } else {
         playSFX('quest');
         notify(
           lang === 'id'
-            ? `${quest.category === 'FITNESS' ? 'Workout' : 'Tugas'} selesai! +${result.goldEarned} ${symbol} (+${result.loggedMinutes}m)${streakNote}`
-            : `${quest.category === 'FITNESS' ? 'Workout' : 'Task'} complete! +${result.goldEarned} ${symbol} (+${result.loggedMinutes}m)${streakNote}`,
+            ? `${quest.category === 'FITNESS' ? 'Workout' : 'Tugas'} selesai! +${result.expEarned} EXP • +${result.goldEarned} ${symbol} (+${result.loggedMinutes}m)${streakNote}`
+            : `${quest.category === 'FITNESS' ? 'Workout' : 'Task'} complete! +${result.expEarned} EXP • +${result.goldEarned} ${symbol} (+${result.loggedMinutes}m)${streakNote}`,
           'success'
         );
       }
@@ -853,7 +853,7 @@ export default function App() {
     }
 
     const refreshedQuests = player.quests.filter((quest) => {
-      if (quest.id.startsWith('daily-plan-') || quest.id.startsWith('ai_q_')) return !quest.completed;
+      if (quest.id.startsWith('daily-plan-') || quest.id.startsWith('target-') || quest.id.startsWith('ai_q_')) return !quest.completed;
       return !player.dreamSteps.some((step) =>
         step.id === quest.dreamStepId && (step.completedActions?.includes(quest.title) || (step.archived && quest.completed)));
     }).map((quest) => {
@@ -1144,7 +1144,7 @@ export default function App() {
   });
 
   const openCheckIn = () => setModal({ type: 'checkIn', ...getJournalMoment(), owner: journal.key });
-  const saveCheckIn = (input: CheckInInput) => {
+  const saveCheckIn = (input: CheckInInput, options?: CheckInCaptureOptions) => {
     if (modal?.type !== 'checkIn' || modal.owner !== journal.key) return;
     const entryId = modal.dateKey + '-' + modal.phase;
     const isNewSlot = !journal.records.some((record) => record.id === entryId);
@@ -1154,16 +1154,62 @@ export default function App() {
     setModal(null);
 
     const cfg = coinConfigRef.current;
+    const symbol = cfg.coinSymbol || 'KOIN';
     const checkInReward = isNewSlot ? Math.max(0, Math.round(cfg.pointPerCheckIn)) : 0;
+    const checkInExp = isNewSlot ? 10 : 0;
     const current = playerRef.current;
-    if (checkInReward > 0 && current) {
-      const nextBalance = current.gold + checkInReward;
-      commitPlayerChange({ ...current, gold: nextBalance });
-      logCoinActivity('earn', 'checkin', checkInReward, nextBalance, `Check-in ${modal.phase} (${modal.dateKey})`);
+
+    if (!current) {
+      notify(lang === 'id' ? 'Check-in tersimpan.' : 'Check-in saved.', 'success');
+      return;
+    }
+
+    const captureEnabled = options?.captureToTodo ?? (modal.phase === 'morning');
+    const keepDualTrack = options?.keepDualTrack ?? true;
+    const captured =
+      captureEnabled && input.note.trim()
+        ? buildCapturedTargetPlan(input.note, current, lang, { includeDualTrackCompanion: keepDualTrack })
+        : { userTasks: [], companionTasks: [], allQuestsToAdd: [] };
+
+    const addedCount = captured.allQuestsToAdd.length;
+    const hasCompanion = captured.companionTasks.length > 0;
+
+    if (checkInReward > 0 || checkInExp > 0 || addedCount > 0) {
+      const nextQuests = addedCount > 0
+        ? [...captured.allQuestsToAdd, ...current.quests].slice(0, 100)
+        : current.quests;
+      const basePlayer: PlayerProfile = {
+        ...current,
+        gold: current.gold + checkInReward,
+        quests: nextQuests,
+      };
+      const expRes = checkInExp > 0
+        ? applyExpAndLevelUp(basePlayer, checkInExp, cfg)
+        : { nextPlayer: basePlayer, levelsGained: 0, levelUpGold: 0 };
+
+      commitPlayerChange(expRes.nextPlayer);
+      if (checkInReward > 0) {
+        logCoinActivity('earn', 'checkin', checkInReward, current.gold + checkInReward, `Check-in ${modal.phase} (${modal.dateKey})`);
+      }
+      if (expRes.levelUpGold > 0) {
+        logCoinActivity('earn', 'level_up', expRes.levelUpGold, expRes.nextPlayer.gold, `Level Up ke Lv.${expRes.nextPlayer.level}`);
+      }
+      playSFX(expRes.levelsGained > 0 ? 'levelup' : 'quest');
+
+      const rewardParts = [
+        checkInExp > 0 ? `+${checkInExp} EXP` : '',
+        checkInReward > 0 ? `+${checkInReward} ${symbol}` : '',
+        addedCount > 0
+          ? (lang === 'id'
+              ? `${addedCount} tugas masuk To-Do List${hasCompanion ? ' (Karier & Impian aktif)' : ''}`
+              : `${addedCount} tasks added to To-Do List${hasCompanion ? ' (Career & Dream active)' : ''}`)
+          : '',
+      ].filter(Boolean);
+
       notify(
         lang === 'id'
-          ? `Check-in tersimpan! +${checkInReward} ${cfg.coinSymbol}`
-          : `Check-in saved! +${checkInReward} ${cfg.coinSymbol}`,
+          ? `Check-in tersimpan! ${rewardParts.join(' • ')}`
+          : `Check-in saved! ${rewardParts.join(' • ')}`,
         'success'
       );
     } else {
@@ -1624,7 +1670,7 @@ export default function App() {
       {modal?.type === 'checkIn' && player && !isAdminView && modal.owner === journal.key && (() => {
         const id = modal.dateKey + '-' + modal.phase;
         const saved = journal.records.find((entry): entry is CheckIn => entry.kind === 'checkin' && entry.id === id);
-        return <DailyCheckInModal key={journal.key + id} name={player.name} lang={lang} phase={modal.phase} initial={saved}
+        return <DailyCheckInModal key={journal.key + id} name={player.name} player={player} coinConfig={coinConfig} lang={lang} phase={modal.phase} initial={saved}
           photoKey={'meal:' + journal.key + ':' + id} evidence={getDailyEvidence(journal.records, dailyLogs, modal.dateKey, player.age)}
           previewReflection={(input) => {
             const draft: CheckIn = { ...input, id, dateKey: modal.dateKey, phase: modal.phase, kind: 'checkin', updatedAt: Date.now() };

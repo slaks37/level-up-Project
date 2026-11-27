@@ -1,9 +1,11 @@
-import { useEffect, useState, type ChangeEvent } from 'react';
-import { Activity, BookOpen, Camera, ClipboardList, ImagePlus, Moon, UserRound, Utensils } from 'lucide-react';
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { Activity, BookOpen, Camera, ClipboardList, ImagePlus, Moon, Sparkles, UserRound, Utensils } from 'lucide-react';
 import { ModalShell } from './Modals';
-import type { Language } from '../types';
+import type { CoinEconomyConfig, Language, PlayerProfile } from '../types';
 import type { CheckInInput, DailyEvidence, DayPhase, Mood } from '../engine/journal';
 import type { DailyReflection } from '../engine/reflection';
+import { buildCapturedTargetPlan } from '../engine/coaching';
+import { DEFAULT_COIN_ECONOMY } from '../engine/science';
 import { deleteAvatarPhoto, loadAvatarPhoto, saveAvatarPhoto } from '../services/avatarStorage';
 import { imageForLocalJournal } from '../services/localPhoto';
 import { tr } from '../data/i18n';
@@ -202,12 +204,38 @@ export function BodyConditionPanel({ owner, evidence, phase, lang, coreCharge, o
   );
 }
 
-export function DailyCheckInModal({ name, phase, lang, evidence, initial, photoKey, previewReflection, onSave, onClose }: {
-  name: string; phase: DayPhase; lang: Language; evidence: DailyEvidence; initial?: CheckInInput; photoKey: string;
+export interface CheckInCaptureOptions {
+  captureToTodo: boolean;
+  keepDualTrack: boolean;
+}
+
+export function DailyCheckInModal({
+  name,
+  player,
+  coinConfig = DEFAULT_COIN_ECONOMY,
+  phase,
+  lang,
+  evidence,
+  initial,
+  photoKey,
+  previewReflection,
+  onSave,
+  onClose,
+}: {
+  name: string;
+  player: PlayerProfile;
+  coinConfig?: CoinEconomyConfig;
+  phase: DayPhase;
+  lang: Language;
+  evidence: DailyEvidence;
+  initial?: CheckInInput;
+  photoKey: string;
   previewReflection: (input: CheckInInput) => DailyReflection;
-  onSave: (input: CheckInInput) => void; onClose: () => void;
+  onSave: (input: CheckInInput, options: CheckInCaptureOptions) => void;
+  onClose: () => void;
 }) {
   const id = lang === 'id';
+  const symbol = coinConfig.coinSymbol || 'KOIN';
   const [sleep, setSleep] = useState(String(initial?.sleepHours ?? evidence.sleep ?? ''));
   const [meal, setMeal] = useState(initial?.meal ?? evidence.meal);
   const [mealNote, setMealNote] = useState(initial?.mealNote ?? evidence.mealNote);
@@ -233,20 +261,34 @@ export function DailyCheckInModal({ name, phase, lang, evidence, initial, photoK
   const [mood, setMood] = useState<Mood>(initial?.mood ?? '');
   const [note, setNote] = useState(initial?.note ?? '');
   const [minutes, setMinutes] = useState(String(initial?.extraMinutes ?? ''));
+  const hasPendingTasks = player.quests.some((q) => !q.completed);
+  const [captureToTodo, setCaptureToTodo] = useState(
+    phase === 'morning' || (phase === 'day' && !hasPendingTasks)
+  );
+  const [keepDualTrack, setKeepDualTrack] = useState(true);
+
+  const capturedPlan = useMemo(
+    () =>
+      captureToTodo
+        ? buildCapturedTargetPlan(note, player, lang, { includeDualTrackCompanion: keepDualTrack })
+        : { userTasks: [], companionTasks: [], allQuestsToAdd: [] },
+    [captureToTodo, keepDualTrack, note, player, lang]
+  );
+
   const draft: CheckInInput = {
     sleepHours: sleep === '' ? null : Number(sleep), meal, mealNote: mealNote.trim(), mealEnjoyment, mealGroups,
     energy, mood, note: note.trim(), extraMinutes: phase === 'morning' ? 0 : Number(minutes) || 0,
   };
   const title = phase === 'morning' ? (id ? `Selamat pagi, ${name}` : `Good morning, ${name}`) :
     phase === 'day' ? (id ? `Halo, ${name}` : `Hello, ${name}`) : (id ? `Selamat malam, ${name}` : `Good evening, ${name}`);
-  const prompt = phase === 'morning' ? (id ? 'Apa kabar? Apa yang ingin kamu kerjakan hari ini?' : 'How are you? What would you like to do today?') :
-    phase === 'day' ? (id ? 'Bagaimana harimu sejauh ini? Apa yang sudah kamu lakukan?' : 'How is your day going? What have you done so far?') :
-      (id ? 'Terima kasih sudah menjalani hari ini. Apa lagi yang ingin kamu catat?' : 'Well done for showing up today. What else would you like to record?');
+  const prompt = phase === 'morning' ? (id ? 'Apa kabar? Apa target yang ingin kamu kerjakan hari ini?' : 'How are you? What targets would you like to complete today?') :
+    phase === 'day' ? (id ? 'Bagaimana harimu sejauh ini? Apa target atau aktivitas yang ingin dicatat?' : 'How is your day going? What targets or activities would you like to log?') :
+      (id ? 'Terima kasih sudah menjalani hari ini. Apa lagi yang ingin kamu catat atau siapkan?' : 'Well done for showing up today. What else would you like to record or prepare?');
   return (
     <ModalShell title={title} icon={<ClipboardList className="size-4 text-sky-700" />} onClose={onClose}>
       <form className="space-y-3" onSubmit={(event) => {
         event.preventDefault();
-        onSave(draft);
+        onSave(draft, { captureToTodo, keepDualTrack });
       }}>
         <p className="text-sm text-slate-700">{prompt}</p>
         <label className="block space-y-1 text-xs font-semibold">
@@ -314,10 +356,100 @@ export function DailyCheckInModal({ name, phase, lang, evidence, initial, photoK
           <p className="text-slate-600">{id ? 'Foto disimpan di perangkat. Kelompok gizi dicatat sesuai pilihanmu.' : 'Photos stay on this device. Nutrition groups are saved from your selection.'}</p>
           {mealPhotoError && <p role="alert" className="text-red-700">{id ? 'Foto belum bisa disimpan.' : 'The photo could not be saved.'}</p>}
         </fieldset>
-        <label className="block space-y-1 text-xs font-semibold">
-          {phase === 'morning' ? (id ? 'Rencana hari ini' : 'Today’s plan') : (id ? 'Aktivitas tambahan di check-in ini' : 'Extra activities in this check-in')}
-          <textarea rows={3} maxLength={1500} value={note} onChange={(event) => setNote(event.target.value)} className={INPUT} placeholder={id ? 'Tulis satu aktivitas per baris' : 'One activity per line'} />
-        </label>
+        <div className="space-y-2 rounded border border-sky-200 bg-sky-50/70 p-2.5">
+          <label className="block space-y-1 text-xs font-semibold text-slate-900">
+            <span>
+              {phase === 'morning'
+                ? (id ? 'Target & rencana hari ini' : 'Today’s targets & plan')
+                : (id ? 'Target / aktivitas tambahan di check-in ini' : 'Targets / extra activities in this check-in')}
+            </span>
+            <textarea
+              rows={3}
+              maxLength={1500}
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              className={INPUT}
+              placeholder={
+                phase === 'morning'
+                  ? (id
+                      ? 'Tulis satu target per baris, mis:\nFollow up klien 30 menit\nKerjakan laporan proyek\nWorkout 15 menit'
+                      : 'One target per line, e.g.:\nFollow up with client 30m\nFinish project deck\nWorkout 15m')
+                  : (id ? 'Tulis satu aktivitas atau target per baris' : 'One activity or target per line')
+              }
+            />
+          </label>
+          <div className="space-y-1.5 text-[11px] text-slate-700">
+            <label className="flex items-start gap-2 cursor-pointer font-semibold text-sky-950">
+              <input
+                type="checkbox"
+                checked={captureToTodo}
+                onChange={(e) => setCaptureToTodo(e.target.checked)}
+                className="mt-0.5 accent-sky-700"
+              />
+              <span>
+                {id
+                  ? `Masukkan otomatis ke Tugas Harian (To-Do List) — tetap dapat +EXP & +${coinConfig.pointPerTask} ${symbol} saat diselesaikan`
+                  : `Automatically add to Daily Tasks (To-Do List) — earns +EXP & +${coinConfig.pointPerTask} ${symbol} when completed`}
+              </span>
+            </label>
+            {captureToTodo && (
+              <label className="flex items-start gap-2 cursor-pointer pl-5 text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={keepDualTrack}
+                  onChange={(e) => setKeepDualTrack(e.target.checked)}
+                  className="mt-0.5 accent-orange-600"
+                />
+                <span>
+                  {id
+                    ? 'Jalankan 2 jalur sekaligus: Karier tetap jalan & 1 langkah kecil Peta Impian otomatis disiapkan'
+                    : 'Run both tracks together: keep Career moving & auto-pair 1 small Dream Roadmap step'}
+                </span>
+              </label>
+            )}
+          </div>
+          {captureToTodo && (capturedPlan.userTasks.length > 0 || capturedPlan.companionTasks.length > 0) && (
+            <div className="rounded border border-sky-200 bg-white p-2 space-y-1.5 text-[11px]">
+              <p className="font-bold text-sky-900 flex items-center gap-1">
+                <Sparkles className="size-3.5 text-orange-500" />
+                {id
+                  ? `${capturedPlan.allQuestsToAdd.length} tugas siap masuk ke Tugas Harian:`
+                  : `${capturedPlan.allQuestsToAdd.length} tasks ready for your Daily To-Do List:`}
+              </p>
+              <ul className="space-y-1">
+                {[...capturedPlan.userTasks, ...capturedPlan.companionTasks].map((item) => {
+                  const badge =
+                    item.track === 'dream'
+                      ? { label: id ? '🎯 IMPIAN' : '🎯 DREAM', cls: 'bg-orange-100 text-orange-900' }
+                      : item.track === 'fitness'
+                        ? { label: '💪 WORKOUT', cls: 'bg-emerald-100 text-emerald-900' }
+                        : item.track === 'study'
+                          ? { label: id ? '📚 BELAJAR' : '📚 STUDY', cls: 'bg-indigo-100 text-indigo-900' }
+                          : { label: id ? '💼 KARIER' : '💼 CAREER', cls: 'bg-sky-100 text-sky-900' };
+                  const coinVal = item.quest.category === 'FITNESS' ? coinConfig.pointPerWorkout : coinConfig.pointPerTask;
+                  return (
+                    <li key={item.quest.id} className="flex items-start justify-between gap-2 border-t border-slate-100 pt-1">
+                      <div className="min-w-0">
+                        <span className={`inline-block rounded px-1.5 py-0.5 font-mono text-[9px] font-bold mr-1.5 ${badge.cls}`}>
+                          {badge.label}
+                        </span>
+                        {item.autoCompanion && (
+                          <span className="inline-block rounded bg-slate-100 px-1 py-0.5 font-mono text-[9px] text-slate-600 mr-1.5">
+                            {id ? 'otomatis 2 jalur' : 'dual-track'}
+                          </span>
+                        )}
+                        <span className="font-semibold text-slate-900 break-words">{item.quest.title}</span>
+                      </div>
+                      <span className="shrink-0 font-mono text-[10px] text-slate-600">
+                        {item.quest.defaultQty}{item.quest.unitType === 'REPS' ? 'r' : 'm'} · +{item.quest.exp} EXP · +{coinVal} {symbol}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+        </div>
         {phase !== 'morning' && <label className="block space-y-1 text-xs font-semibold">{id ? 'Durasi aktivitas tambahan (menit)' : 'Extra activity duration (minutes)'}
           <input type="number" inputMode="numeric" min="0" max="1440" step="1" value={minutes} onChange={(event) => setMinutes(event.target.value)} className={INPUT} />
         </label>}

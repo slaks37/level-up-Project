@@ -94,6 +94,270 @@ export interface DailyTaskSuggestion {
   skill: string;
   reason: string;
   stepId?: string;
+  track?: 'career' | 'dream' | 'study';
+}
+
+export interface CapturedTaskPreview {
+  quest: Quest;
+  track: 'career' | 'dream' | 'study' | 'fitness';
+  autoCompanion?: 'career' | 'dream';
+}
+
+const STOPWORDS = new Set([
+  'yang', 'untuk', 'dengan', 'dalam', 'dari', 'pada', 'atau', 'akan', 'bisa', 'harus',
+  'agar', 'supaya', 'menjadi', 'punya', 'buat', 'membuat', 'lebih', 'tinggi', 'baru',
+  'kerja', 'hari', 'bulan', 'tahun', 'target', 'level', 'with', 'from', 'that', 'this',
+  'into', 'your', 'have', 'make', 'more', 'build', 'work', 'goal', 'step',
+]);
+
+const FITNESS_REGEX =
+  /\b(gym|workout|olahraga|lari|jogging|joging|running|run|push[\s-]?up|pull[\s-]?up|squat|plank|cardio|kardio|renang|swimming|swim|sepeda|gowes|cycling|yoga|stretching|senam|sit[\s-]?up|angkat beban|fitness|jalan cepat|jalan santai|skipping|badminton|futsal|basket|tennis|pilates|latihan fisik)\b/i;
+
+const STUDY_REGEX =
+  /\b(belajar|study|baca|reading|read|buku|kursus|course|riset|research|materi|modul|tutorial|latihan soal|kuliah|skripsi|pelajari|ngoding|coding|programming|bahasa|english|inggris|sertifikasi|webinar|workshop|review catatan|catatan belajar|nonton materi)\b/i;
+
+const DREAM_HINT_REGEX =
+  /\b(impian|dream|peta impian|usaha sendiri|bisnis sendiri|side project|portofolio|portfolio|passion|cita-cita|bisnis baru|produk sendiri)\b/i;
+
+function extractKeywords(text: string): string[] {
+  return [...new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 4 && !STOPWORDS.has(w))
+  )];
+}
+
+export function parseDailyTargetLine(
+  rawLine: string,
+  player: PlayerProfile,
+  lang: Language
+): CapturedTaskPreview | null {
+  const id = lang === 'id';
+  const cleaned = rawLine
+    .replace(/^\s*(?:[-*•–—]+|\d+[.)]|\[[ xX]?\])\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 140);
+  if (cleaned.length < 2) return null;
+
+  const isFitness = FITNESS_REGEX.test(cleaned);
+  const isStudy = !isFitness && STUDY_REGEX.test(cleaned);
+  const category: Quest['category'] = isFitness ? 'FITNESS' : isStudy ? 'STUDY' : 'CAREER';
+
+  // Detect duration or reps from user phrasing
+  let unitType: Quest['unitType'] = 'MINUTES';
+  let defaultQty = isFitness ? 15 : 25;
+  let estMinutes = defaultQty;
+
+  const hourMatch = cleaned.match(/(\d+(?:[.,]\d+)?)\s*(?:jam|hours?|hrs?|h)\b/i);
+  const minMatch = cleaned.match(/(\d+)\s*(?:menit|mnt|minutes?|mins?|m)\b/i);
+  const setRepMatch = cleaned.match(/(\d+)\s*[x×]\s*(\d+)/i);
+  const repMatch = cleaned.match(/(\d+)\s*(?:reps?|repetisi|kali)\b/i);
+
+  if (isFitness && setRepMatch) {
+    const sets = Math.max(1, Math.min(8, Number(setRepMatch[1]) || 2));
+    const reps = Math.max(1, Math.min(100, Number(setRepMatch[2]) || 10));
+    unitType = 'REPS';
+    defaultQty = sets * reps;
+    estMinutes = Math.max(10, sets * 4);
+  } else if (isFitness && repMatch) {
+    unitType = 'REPS';
+    defaultQty = Math.max(5, Math.min(500, Number(repMatch[1]) || 20));
+    estMinutes = 15;
+  } else if (hourMatch) {
+    const hours = Number(hourMatch[1].replace(',', '.'));
+    if (Number.isFinite(hours) && hours > 0) {
+      defaultQty = Math.max(10, Math.min(240, Math.round(hours * 60)));
+      estMinutes = defaultQty;
+    }
+  } else if (minMatch) {
+    const mins = Number(minMatch[1]);
+    if (Number.isFinite(mins) && mins > 0) {
+      defaultQty = Math.max(5, Math.min(240, mins));
+      estMinutes = defaultQty;
+    }
+  }
+
+  const activeStep = getActiveDreamStep(player);
+  const dreamKeywords = extractKeywords(
+    [player.goal, activeStep?.title || '', activeStep?.skillName || ''].join(' ')
+  );
+  const lower = cleaned.toLowerCase();
+  const matchesDreamKeyword =
+    !isFitness &&
+    (DREAM_HINT_REGEX.test(cleaned) ||
+      dreamKeywords.some((kw) => lower.includes(kw)));
+
+  const dreamStepId = matchesDreamKeyword && activeStep ? activeStep.id : null;
+  const track: CapturedTaskPreview['track'] = isFitness
+    ? 'fitness'
+    : dreamStepId
+      ? 'dream'
+      : category === 'STUDY'
+        ? 'study'
+        : 'career';
+
+  // Pick skill tag from player's existing skills if mentioned, else contextual default
+  const existingSkillNames = [
+    ...(player.shadows || []).map((s) => s.name),
+    ...Object.values(player.skillProgress || {}).map((s) => s.name),
+  ];
+  const matchedSkill = existingSkillNames.find(
+    (name) => name.length >= 3 && lower.includes(name.toLowerCase())
+  );
+  const skillTag =
+    matchedSkill ||
+    (dreamStepId && activeStep?.skillName) ||
+    (isFitness
+      ? (id ? 'Kebugaran Rutin' : 'Fitness Routine')
+      : category === 'STUDY'
+        ? (id ? 'Belajar Terarah' : 'Focused Study')
+        : player.career?.project?.trim().slice(0, 40) ||
+          (id ? 'Eksekusi Karier' : 'Career Execution'));
+
+  const quest: Quest = {
+    id: 'target-' + crypto.randomUUID(),
+    title: cleaned,
+    category,
+    unitType,
+    defaultQty,
+    estMinutes,
+    skillTag,
+    dreamStepId,
+    exp: 20,
+    gold: 1,
+    completed: false,
+  };
+
+  return { quest, track };
+}
+
+export function buildDualTrackCompanionTask(
+  missingTrack: 'career' | 'dream',
+  player: PlayerProfile,
+  lang: Language,
+  existingTitles: Set<string>
+): CapturedTaskPreview | null {
+  const id = lang === 'id';
+  if (missingTrack === 'dream') {
+    const active = getActiveDreamStep(player);
+    if (!active) return null;
+    const rawTitle =
+      getNextRoadmapAction(active, lang) ||
+      (id ? `Langkah kecil untuk impian: ${active.title}` : `Small dream step: ${active.title}`);
+    const title = rawTitle.trim().slice(0, 140);
+    if (!title || existingTitles.has(title.toLowerCase())) return null;
+    const category: Quest['category'] = /fondasi|skill inti|foundation|core skill/i.test(active.phase)
+      ? 'STUDY'
+      : 'CAREER';
+    return {
+      quest: {
+        id: 'daily-plan-' + crypto.randomUUID(),
+        title,
+        category,
+        unitType: 'MINUTES',
+        defaultQty: 15,
+        estMinutes: 15,
+        skillTag: active.skillName || (id ? 'Peta Impian' : 'Dream Roadmap'),
+        dreamStepId: active.id,
+        exp: 20,
+        gold: 1,
+        completed: false,
+      },
+      track: 'dream',
+      autoCompanion: 'dream',
+    };
+  }
+
+  // Missing Career track
+  const work = player.career;
+  const candidateTitle =
+    (work?.project && work.projectStatus === 'blocked'
+      ? (id
+          ? `Urai 1 hambatan di proyek ${work.project}`
+          : `Unblock 1 issue on ${work.project}`)
+      : work?.nextAction?.trim()) || getCareerActions(player, lang)[0];
+  const title = (candidateTitle || '').trim().slice(0, 140);
+  if (!title || existingTitles.has(title.toLowerCase())) return null;
+  return {
+    quest: {
+      id: 'daily-plan-' + crypto.randomUUID(),
+      title,
+      category: 'CAREER',
+      unitType: 'MINUTES',
+      defaultQty: 15,
+      estMinutes: 15,
+      skillTag: work?.project?.trim().slice(0, 40) || (id ? 'Eksekusi Karier' : 'Career Execution'),
+      dreamStepId: null,
+      exp: 20,
+      gold: 1,
+      completed: false,
+    },
+    track: 'career',
+    autoCompanion: 'career',
+  };
+}
+
+export function buildCapturedTargetPlan(
+  noteText: string,
+  player: PlayerProfile,
+  lang: Language,
+  options: { includeDualTrackCompanion?: boolean } = {}
+): {
+  userTasks: CapturedTaskPreview[];
+  companionTasks: CapturedTaskPreview[];
+  allQuestsToAdd: Quest[];
+} {
+  const existingTitles = new Set(
+    player.quests.map((q) => q.title.trim().slice(0, 140).toLowerCase())
+  );
+  const rawLines = noteText
+    .split(/\n+/)
+    .flatMap((line) => (line.includes(';') ? line.split(';') : [line]));
+
+  const userTasks: CapturedTaskPreview[] = [];
+  for (const raw of rawLines) {
+    if (userTasks.length >= 8) break;
+    const parsed = parseDailyTargetLine(raw, player, lang);
+    if (!parsed) continue;
+    const key = parsed.quest.title.toLowerCase();
+    if (existingTitles.has(key)) continue;
+    existingTitles.add(key);
+    userTasks.push(parsed);
+  }
+
+  const companionTasks: CapturedTaskPreview[] = [];
+  if (options.includeDualTrackCompanion && userTasks.length > 0) {
+    const hasCareerTrack =
+      player.quests.some((q) => !q.completed && q.category === 'CAREER' && !q.dreamStepId) ||
+      userTasks.some((t) => t.track === 'career');
+    const hasDreamTrack =
+      player.quests.some((q) => !q.completed && Boolean(q.dreamStepId)) ||
+      userTasks.some((t) => t.track === 'dream');
+
+    if (!hasDreamTrack) {
+      const dreamComp = buildDualTrackCompanionTask('dream', player, lang, existingTitles);
+      if (dreamComp) {
+        existingTitles.add(dreamComp.quest.title.toLowerCase());
+        companionTasks.push(dreamComp);
+      }
+    }
+    if (!hasCareerTrack) {
+      const careerComp = buildDualTrackCompanionTask('career', player, lang, existingTitles);
+      if (careerComp) {
+        existingTitles.add(careerComp.quest.title.toLowerCase());
+        companionTasks.push(careerComp);
+      }
+    }
+  }
+
+  return {
+    userTasks,
+    companionTasks,
+    allQuestsToAdd: [...userTasks.map((t) => t.quest), ...companionTasks.map((t) => t.quest)],
+  };
 }
 
 export function planDailyFocus(player: PlayerProfile, evidence: DailyEvidence, events: CalendarEvent[],
@@ -111,85 +375,88 @@ export function planDailyFocus(player: PlayerProfile, evidence: DailyEvidence, e
   const note = evidence.status === 'rest'
     ? (id ? 'Sisihkan waktu untuk pulih. Pilih satu tindak lanjut singkat bila masih perlu.' : 'Make time to recover. Pick one short follow-up if needed.')
     : phase === 'evening'
-      ? (id ? 'Tutup hari dengan mencatat hasil dan satu langkah untuk besok.' : 'Close the day by recording what you finished and one step for tomorrow.')
+      ? (id ? 'Tutup hari dengan mencatat hasil karier & impian, lalu siapkan satu langkah untuk besok.' : 'Close the day by recording career & dream wins, then pick one step for tomorrow.')
       : light
-        ? (id ? 'Sisakan jeda dan pilih satu pekerjaan yang bisa selesai dalam waktu singkat.' : 'Leave room for a break and pick one short task.')
+        ? (id ? 'Sisakan jeda dan pilih satu langkah ringan agar karier & impian tetap bergerak.' : 'Leave room for a break and pick one light step to keep career & dream moving.')
         : active
-          ? (id ? `Lanjutkan tahap aktifmu · ${active.title}` : `Continue your active milestone · ${active.title}`)
+          ? (id ? `Jalankan 2 jalur hari ini: tugas karier harian + 1 langkah kecil Peta Impian (${active.title}).` : `Run both tracks today: daily career work + 1 small Dream Roadmap step (${active.title}).`)
           : goalsDone
             ? (id ? 'Tahapmu sudah selesai. Tinjau hasil sebelum memilih target berikutnya.' : 'Your milestones are complete. Review your results before picking the next goal.')
-            : (id ? 'Pilih satu hasil yang ingin kamu capai hari ini.' : 'Choose one outcome to achieve today.');
+            : (id ? 'Pilih satu hasil karier dan satu langkah impian untuk hari ini.' : 'Choose one career outcome and one dream step for today.');
 
   const candidates: Array<Omit<DailyTaskSuggestion, 'minutes'>> = [];
   const projectSkill = id ? 'Manajemen proyek' : 'Project management';
   if (meeting) candidates.push({
     title: (id ? 'Siapkan bahan dan keputusan untuk ' : 'Prepare notes and decisions for ') + meeting.title,
-    category: 'CAREER', skill: projectSkill,
-    reason: id ? 'Ada acara berikutnya di agenda hari ini.' : 'This is the next event on your calendar today.',
+    category: 'CAREER', skill: projectSkill, track: 'career',
+    reason: id ? 'Jalur Karier · Ada acara berikutnya di agenda hari ini.' : 'Career track · Next event on your calendar today.',
   });
   if (evidence.status !== 'rest' && phase !== 'evening') {
     const work = player.career;
     if (work?.project && work.projectStatus === 'blocked') candidates.push({
       title: id ? `Catat satu hambatan di ${work.project} dan siapa yang bisa membantu.` : `Identify one blocker on ${work.project} and who can help.`,
-      category: 'CAREER', skill: projectSkill,
-      reason: id ? 'Proyek ini kamu tandai terhambat.' : 'You marked this project as blocked.',
+      category: 'CAREER', skill: projectSkill, track: 'career',
+      reason: id ? 'Jalur Karier · Proyek ini kamu tandai terhambat.' : 'Career track · You marked this project as blocked.',
     });
     const action = active && getNextRoadmapAction(active, lang);
     if (active && action) candidates.push({
-      title: action, category: 'CAREER', skill: active.skillName, stepId: active.id,
+      title: action,
+      category: /fondasi|skill inti|foundation|core skill/i.test(active.phase) ? 'STUDY' : 'CAREER',
+      skill: active.skillName, stepId: active.id, track: 'dream',
       reason: active.completedActions?.length
-        ? (id ? 'Melanjutkan langkah yang sudah kamu selesaikan.' : 'Builds on the steps you have finished.')
-        : (id ? 'Langkah berikutnya pada tahap aktifmu.' : 'The next action for your active milestone.'),
+        ? (id ? 'Jalur Impian · Melanjutkan langkah Peta Impian yang sudah selesai.' : 'Dream track · Builds on your completed Dream Roadmap steps.')
+        : (id ? 'Jalur Impian · Langkah berikutnya menuju impian utamamu.' : 'Dream track · Next small step toward your main dream.'),
     });
     if (work?.nextAction && work.projectStatus !== 'done') candidates.push({
-      title: work.nextAction, category: 'CAREER', skill: projectSkill,
-      reason: id ? 'Berasal dari tindak lanjut yang kamu catat di profil kerja.' : 'From the follow-up you saved in your work profile.',
+      title: work.nextAction, category: 'CAREER', skill: projectSkill, track: 'career',
+      reason: id ? 'Jalur Karier · Dari tindak lanjut di profil kerja.' : 'Career track · From your saved work follow-up.',
     });
     if (work?.project && work.projectStatus === 'planning' && !work.nextAction) candidates.push({
       title: id ? `Tentukan hasil pertama yang bisa ditunjukkan dari ${work.project}.` : `Define the first demonstrable outcome for ${work.project}.`,
-      category: 'CAREER', skill: projectSkill,
-      reason: id ? 'Proyek ini masih dalam tahap perencanaan.' : 'This project is still in planning.',
+      category: 'CAREER', skill: projectSkill, track: 'career',
+      reason: id ? 'Jalur Karier · Proyek ini masih dalam tahap perencanaan.' : 'Career track · This project is still in planning.',
     });
     const practice = Object.values(player.skillProgress).filter((skill) => !skill.unlocked && skill.sessions > 0)
       .sort((a, b) => Number(b.name === active?.skillName) - Number(a.name === active?.skillName) || b.sessions - a.sessions || b.totalMinutes - a.totalMinutes)[0];
     if (practice) candidates.push({
       title: id ? `Latih ${practice.name} dan catat satu hal yang membaik` : `Practice ${practice.name} and note one improvement`,
-      category: 'STUDY', skill: practice.name,
+      category: 'STUDY', skill: practice.name, track: 'study',
       reason: id ? `Kamu sudah mencatat ${practice.sessions} sesi skill ini.` : `You have logged ${practice.sessions} sessions of this skill.`,
     });
-    if (candidates.length <= 1 && !evidence.work && player.profession) candidates.push({
-      title: getCareerActions(player, lang)[0], category: 'CAREER', skill: projectSkill,
-      reason: id ? 'Saran berdasarkan profil kerja dan aktivitas hari ini.' : 'Based on your work profile and today’s activity.',
+    if (!candidates.some((c) => c.track === 'career') && player.profession) candidates.push({
+      title: getCareerActions(player, lang)[0], category: 'CAREER', skill: projectSkill, track: 'career',
+      reason: id ? 'Jalur Karier · Saran berdasarkan peran kerjamu.' : 'Career track · Based on your work profile.',
     });
   }
 
   const known = new Set([...evidence.completed, ...player.quests.map((quest) => quest.title)].map((title) => title.trim().slice(0, 140).toLowerCase()));
-  const available = {
-    CAREER: player.dailyBreakdown.work - Math.max(evidence.work, player.dailyDurationLog.work),
-    STUDY: player.dailyBreakdown.study - Math.max(evidence.study, player.dailyDurationLog.study),
-  };
-  for (const task of pending) {
-    if (task.category === 'CAREER' || task.category === 'STUDY') {
-      available[task.category] -= task.unitType === 'MINUTES' ? task.defaultQty : task.estMinutes ?? 0;
-    }
-  }
-  let remaining = Math.max(0, player.dailyBreakdown.total - Math.max(evidence.minutesTotal,
-    player.dailyDurationLog.work + player.dailyDurationLog.study + player.dailyDurationLog.fitness));
-  remaining = Math.min(remaining, phase === 'evening' ? 10 : light ? 15 : 35);
+  const hasCareerInList = player.quests.some((q) => !q.completed && q.category === 'CAREER' && !q.dreamStepId);
+  const hasDreamInList = player.quests.some((q) => !q.completed && Boolean(q.dreamStepId));
+
   const suggestions: DailyTaskSuggestion[] = [];
-  for (const candidate of candidates) {
+  const defaultMin = light || phase === 'evening' ? 10 : 15;
+
+  // Guarantee dual-track visibility: pick 1 Dream + 1 Career if missing, up to 3 suggestions total
+  const ordered = [...candidates].sort((a, b) => {
+    const score = (c: Omit<DailyTaskSuggestion, 'minutes'>) => {
+      if (c.track === 'dream' && !hasDreamInList) return 0;
+      if (c.track === 'career' && !hasCareerInList) return 1;
+      return 2;
+    };
+    return score(a) - score(b);
+  });
+
+  for (const candidate of ordered) {
+    if (suggestions.length >= 3) break;
     const title = candidate.title.trim().slice(0, 140);
     const key = title.toLowerCase();
-    const minutes = Math.min(light || phase === 'evening' ? 10 : 15, available[candidate.category], remaining);
-    if (!title || known.has(key) || minutes < 5) continue;
-    suggestions.push({ ...candidate, title, minutes });
+    if (!title || known.has(key)) continue;
+    suggestions.push({ ...candidate, title, minutes: defaultMin });
     known.add(key);
-    available[candidate.category] -= minutes;
-    remaining -= minutes;
   }
   const planned = active && pending.find((task) => task.dreamStepId === active.id);
   const pendingNote = planned && !light && phase !== 'evening'
-    ? (id ? `Sudah ada di daftar · ${planned.title}` : `Already on your list · ${planned.title}`)
+    ? (id ? `🎯 Jalur Impian aktif di daftar · ${planned.title}` : `🎯 Dream track on your list · ${planned.title}`)
     : '';
   return { note, pendingNote, suggestions };
 }
