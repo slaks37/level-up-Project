@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowRight, Cpu, Menu, X } from 'lucide-react';
+import { ArrowRight, Menu, X } from 'lucide-react';
 import type { Language } from '../../types';
 import { PUBLIC_NAV_LINKS } from '../../data/homepageContent';
 import { trackHomepageEvent } from '../../services/homepageEvents';
@@ -38,9 +38,11 @@ export const PublicNavbar: React.FC<PublicNavbarProps> = ({
           onClick={() => setMobileOpen(false)}
           className="flex items-center gap-2.5 min-w-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded"
         >
-          <div className="w-8 h-8 rounded bg-slate-900 border border-white/15 flex items-center justify-center text-orange-400 shadow-xs shrink-0">
-            <Cpu className="w-4 h-4" aria-hidden="true" />
-          </div>
+          <img
+            src="/favicon.svg"
+            alt="Level Up Logo"
+            className="w-8 h-8 rounded-md shadow-xs shrink-0"
+          />
           <div className="min-w-0">
             <p className="font-hud text-sm sm:text-base font-bold tracking-wider text-white leading-none">
               LEVEL UP

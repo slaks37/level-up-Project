@@ -3,7 +3,6 @@ import {
   ArrowDown,
   ArrowRight,
   CheckCircle2,
-  Cpu,
   ExternalLink,
   Handshake,
   ShieldCheck,
@@ -514,9 +513,11 @@ export const EcosystemAndClosingSections: React.FC<EcosystemAndClosingSectionsPr
             {/* Brand Column */}
             <div className="lg:col-span-4 space-y-3">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded bg-slate-900 border border-white/15 flex items-center justify-center text-orange-400">
-                  <Cpu className="w-4 h-4" aria-hidden="true" />
-                </div>
+                <img
+                  src="/favicon.svg"
+                  alt="Level Up Logo"
+                  className="w-8 h-8 rounded-md shrink-0"
+                />
                 <span className="font-hud text-sm font-bold tracking-wider text-white">
                   LEVEL UP BY SOCIOPRENEUR
                 </span>

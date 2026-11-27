@@ -3,7 +3,6 @@ import {
   BookOpenCheck,
   Cloud,
   CloudOff,
-  Cpu,
   Download,
   Loader2,
   LogIn,
@@ -92,9 +91,11 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-300 shadow-xs safe-top">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded bg-slate-900 flex items-center justify-center text-orange-400 shadow-xs flex-shrink-0">
-            <Cpu className="w-4 h-4" />
-          </div>
+          <img
+            src="/favicon.svg"
+            alt="Level Up Logo"
+            className="w-8 h-8 rounded-md shadow-xs flex-shrink-0"
+          />
           <div className="min-w-0">
             <p className="font-hud text-sm font-bold leading-tight text-slate-900 sm:text-base">{brandName}</p>
             <p lang="en" className="mt-0.5 text-[10px] leading-tight text-slate-600 sm:text-[11px]">{brandTagline}</p>

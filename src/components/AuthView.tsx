@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   Cloud,
-  Cpu,
   Eye,
   EyeOff,
   KeyRound,
@@ -182,9 +181,11 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
         <div className="p-5 sm:p-6 space-y-5">
           <div className="text-center space-y-1.5">
-            <div className="w-12 h-12 rounded-lg bg-slate-900 text-orange-400 flex items-center justify-center mx-auto shadow-sm">
-              <Cpu className="w-6 h-6" />
-            </div>
+            <img
+              src="/favicon.svg"
+              alt="Level Up Logo"
+              className="w-12 h-12 rounded-lg mx-auto shadow-sm"
+            />
             <h1 className="font-hud font-bold text-2xl text-slate-900 tracking-wide">
               {adminOnly ? 'ADMIN CONTROL CENTER' : 'LEVEL UP SYSTEM'}
             </h1>
